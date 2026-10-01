@@ -12,13 +12,18 @@
   const S = {
     sens: store.get('sens', 65), quality: store.get('quality', '1080'), debug: store.get('debug', false),
     sound: store.get('sound', true), haptic: store.get('haptic', true), toured: store.get('toured', false),
+    autozoom: store.get('autozoom', true), sport: store.get('sport', true), record: store.get('record', false), fullres: store.get('fullres', false),
   };
   RULES.shutter.threshold = S.sens;
 
   /* ------------------------------------------------------------ photo storage (IndexedDB, memory fallback) */
   let db = null; const mem = new Map();
   const openDB = () => new Promise(res => {
-    try { const r = indexedDB.open('surfcam', 1); r.onupgradeneeded = () => r.result.createObjectStore('shots', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
+    try {
+      const r = indexedDB.open('surfcam', 2);
+      r.onupgradeneeded = () => { const d = r.result; for (const n of ['shots', 'sessions', 'recordings']) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: 'id' }); };
+      r.onsuccess = () => res(r.result); r.onerror = () => res(null);
+    }
     catch { res(null); }
   });
   async function putShot(s) { mem.set(s.id, s); if (db) await new Promise(r => { const tx = db.transaction('shots', 'readwrite'); tx.objectStore('shots').put(s); tx.oncomplete = tx.onerror = r; }); }
@@ -26,6 +31,8 @@
     if (!db) return [...mem.values()];
     return new Promise(r => { const q = db.transaction('shots').objectStore('shots').getAll(); q.onsuccess = () => r(q.result || []); q.onerror = () => r([...mem.values()]); });
   }
+  async function putIn(store_, obj) { if (db) await new Promise(r => { const tx = db.transaction(store_, 'readwrite'); tx.objectStore(store_).put(obj); tx.oncomplete = tx.onerror = r; }); }
+  async function getFrom(store_, id) { if (!db) return null; return new Promise(r => { const q = db.transaction(store_).objectStore(store_).get(id); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); }
   async function delShot(id) { mem.delete(id); if (db) await new Promise(r => { const tx = db.transaction('shots', 'readwrite'); tx.objectStore('shots').delete(id); tx.oncomplete = tx.onerror = r; }); }
 
   /* ------------------------------------------------------------ detection worker */
@@ -35,7 +42,7 @@
     const m = e.data;
     if (m.type === 'ready') { ready = true; $('#loading').hidden = true; refreshState(); }
     else if (m.type === 'error') { $('#loading').querySelector('.chip').textContent = 'טעינת הזיהוי נכשלה. סגור ופתח את האפליקציה שוב.'; }
-    else if (m.type === 'result') onResult(m);
+    else if (m.type === 'result' && m.id > 0) onResult(m);   // negative ids = readiness-check probes
   };
   worker.postMessage({ type: 'init' });
 
@@ -45,7 +52,80 @@
     const q = S.quality === '4k' ? { width: { ideal: 3840 }, height: { ideal: 2160 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } };
     stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, frameRate: { ideal: 30 }, ...q } });
     video.srcObject = stream; video.muted = true; await video.play();
-    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom();
+    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom(); setupCameraControls();
+  }
+  let caps = {};
+  const expo = { manual: false, time: 0, iso: 0, lastAdjust: 0, lastPoi: 0 };
+  function setupCameraControls() {
+    caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    const adv = {};
+    if (caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+    expo.manual = false;
+    // research: surf needs ~1/640-1/1000 s to freeze spray. Exposure time is in units of 100 microseconds (10 = 1/1000 s)
+    if (S.sport && caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime) {
+      expo.manual = true; expo.time = Math.min(caps.exposureTime.max, Math.max(caps.exposureTime.min, 10));
+      adv.exposureMode = 'manual'; adv.exposureTime = expo.time;
+      if (caps.iso) { expo.iso = Math.min(caps.iso.max, Math.max(caps.iso.min, 200)); adv.iso = expo.iso; }
+    } else if (caps.exposureMode && caps.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+    if (Object.keys(adv).length) track.applyConstraints({ advanced: [adv] }).catch(() => { expo.manual = false; });
+    $('#autozoom-row').hidden = !caps.zoom; $('#sport-row').hidden = !(caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime);
+    zoomState.cur = caps.zoom ? Number($('#zoom').value) : null; zoomState.base = zoomState.cur;
+  }
+  function exposureLoop(img, st, t) {
+    if (source !== 'camera' || !track) return;
+    // point focus + metering at the surfer (expose for the skin, as pros do)
+    if (st && st.visible && st.det && t - expo.lastPoi > 1.5) {
+      expo.lastPoi = t; const d = st.det;
+      track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x: Math.min(1, Math.max(0, (d.x1 + d.x2) / 2 / video.videoWidth)), y: Math.min(1, Math.max(0, (d.y1 + d.y2) / 2 / video.videoHeight)) }] }] }).catch(() => { });
+    }
+    if (!expo.manual || t - expo.lastAdjust < 1) return;
+    expo.lastAdjust = t;
+    let sum = 0, n = 0; const p = img.data;
+    for (let i = 0; i < p.length; i += 4 * 31) { sum += 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2]; n++; }
+    const mean = sum / n, adv = {};
+    if (mean < 95) {            // too dark: raise ISO first (keeps the shutter fast), then allow up to 1/500 s
+      if (caps.iso && expo.iso < Math.min(caps.iso.max, 1600)) { expo.iso = Math.min(caps.iso.max, 1600, Math.round(expo.iso * 1.4)); adv.iso = expo.iso; }
+      else if (expo.time < Math.min(caps.exposureTime.max, 20)) { expo.time = Math.min(caps.exposureTime.max, 20, expo.time * 1.3); adv.exposureTime = expo.time; }
+      else { expo.manual = false; adv.exposureMode = 'continuous'; }   // not enough light for sport mode: let the phone decide
+    } else if (mean > 170) {
+      if (expo.time > caps.exposureTime.min * 1.05 && expo.time > 5) { expo.time = Math.max(caps.exposureTime.min, 5, expo.time / 1.3); adv.exposureTime = expo.time; }
+      else if (caps.iso && expo.iso > caps.iso.min) { expo.iso = Math.max(caps.iso.min, Math.round(expo.iso / 1.4)); adv.iso = expo.iso; }
+    }
+    if (Object.keys(adv).length) track.applyConstraints({ advanced: [adv] }).catch(() => { });
+  }
+
+  /* auto zoom: keep the surfer ~25% of the frame height (like the reference photos), never let him slide out */
+  const zoomState = { cur: null, base: null, lastSet: -1e9, lastSeenT: -1e9 };
+  function autoZoom(st, t, vw, vh) {
+    if (!S.autozoom || !caps.zoom || source !== 'camera' || zoomState.cur === null || t - zoomState.lastSet < 0.5) return;
+    const z = zoomState.cur, zc = caps.zoom;
+    let target;
+    if (st && st.visible && st.det) {
+      zoomState.lastSeenT = t;
+      const d = st.det, hf = (d.y2 - d.y1) / vh, cx = (d.x1 + d.x2) / 2 / vw - 0.5, cy = (d.y1 + d.y2) / 2 / vh - 0.5;
+      const want = z * RULES.framing.subjectHeight / Math.max(hf, 0.01);
+      // zooming pushes him outward, and the phone can't turn: keep where he'll be in ~1.2 s inside the picture
+      const px = cx + Math.max(-0.3, Math.min(0.3, (st.vx || 0) * 1.2 / vw));
+      const ex = Math.max(Math.abs(cx), Math.abs(px));
+      const room = z * Math.min(0.36 / Math.max(ex, 0.02), 0.33 / Math.max(Math.abs(cy), 0.02));
+      target = Math.min(want, room);
+    } else if (t - zoomState.lastSeenT > 2.5) target = zoomState.base;   // lost him: back to the wide view
+    else return;
+    target = Math.max(zc.min, Math.min(zc.max, target));
+    let next = z + (target - z) * 0.4;
+    if (target < z) next = Math.min(next, z - (z - target) * 0.7); // backing out matters more than zooming in
+    next = Math.max(z / 1.5, Math.min(z * 1.25, next));
+    if (Math.abs(next - z) / z < 0.05) return;
+    zoomState.lastSet = t; zoomState.cur = next;
+    track.applyConstraints({ advanced: [{ zoom: next }] }).catch(() => { });
+    $('#zoom-val').textContent = '×' + next.toFixed(1);
+    // the picture just got bigger/smaller around its centre: move what we track with it
+    const f = next / z, sc = b => ({ ...b, x1: (b.x1 - vw / 2) * f + vw / 2, x2: (b.x2 - vw / 2) * f + vw / 2, y1: (b.y1 - vh / 2) * f + vh / 2, y2: (b.y2 - vh / 2) * f + vh / 2 });
+    if (tracker.s.det) tracker.s.det = sc(tracker.s.det);
+    if (tracker.prev) tracker.prev = [(tracker.prev[0] - vw / 2) * f + vw / 2, (tracker.prev[1] - vh / 2) * f + vh / 2];
+    tracker.s.vx *= f; tracker.s.vy *= f;
+    if (lastState && lastState.det) lastState.det = sc(lastState.det);
+    dyn.rescale(f, vw / 2, vh / 2);
   }
   function stopCamera() { if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; track = null; }
   function setupZoom() {
@@ -55,7 +135,10 @@
     row.hidden = false; z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
     z.value = Math.min(caps.zoom.max, Math.max(caps.zoom.min, store.get('zoom', caps.zoom.min))); applyZoom(z.value);
   }
-  function applyZoom(v) { $('#zoom-val').textContent = '×' + Number(v).toFixed(1); if (track) track.applyConstraints({ advanced: [{ zoom: Number(v) }] }).catch(() => { }); store.set('zoom', Number(v)); }
+  function applyZoom(v) {
+    $('#zoom-val').textContent = '×' + Number(v).toFixed(1); if (track) track.applyConstraints({ advanced: [{ zoom: Number(v) }] }).catch(() => { }); store.set('zoom', Number(v));
+    zoomState.cur = Number(v); zoomState.base = Number(v);   // the manual zoom is the wide view auto-zoom returns to
+  }
 
   let wakeLock = null;
   async function keepAwake() { try { wakeLock = await navigator.wakeLock.request('screen'); } catch { } }
@@ -84,24 +167,67 @@
     }
     drawOverlay(); requestAnimationFrame(loop);
   }
+  // A far surfer is ~10 px when the whole frame is squeezed into 416 px. While we follow him, look at a
+  // crop around him at full resolution instead (2 of every 3 passes); the 3rd pass scans the whole frame.
+  // Nobody tracked yet: sweep the frame in overlapping square tiles (each seen ~2.5x sharper than the full
+  // frame) with a full-frame pass between sweeps. Tracking: crop around him on 3 of every 4 passes.
+  let detCount = 0, tileIdx = 0;
+  function tilesFor(vw, vh) {
+    const side = Math.round(Math.min(vw, vh) * 0.67), out = [];
+    if (side < 360) return out;
+    const nx = Math.max(1, Math.ceil((vw - side) / (side * 0.8)) + 1), ny = Math.max(1, Math.ceil((vh - side) / (side * 0.8)) + 1);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
+      out.push({ x: nx > 1 ? Math.round(i * (vw - side) / (nx - 1)) : 0, y: ny > 1 ? Math.round(j * (vh - side) / (ny - 1)) : 0, s: side, tile: 1 });
+    return out;
+  }
+  function roiFor(vw, vh, t) {
+    const st = lastState;
+    if (!st || !st.det || st.t - st.lastSeen > 1.5) {
+      const tiles = tilesFor(vw, vh);
+      if (!tiles.length) return null;
+      // full frame every 4th pass (a big, close surfer may not fit inside one tile)
+      const i = tileIdx++ % 4 === 0 ? -1 : (tileIdx - 1 - Math.floor((tileIdx - 1) / 4) - 1) % tiles.length;
+      return i < 0 ? null : tiles[i];
+    }
+    if (detCount % 4 === 0) return null;
+    // aim where he will be now (he keeps moving while we wait for the detector), with room for his speed
+    const d = st.det, dt = Math.min(1.5, Math.max(0, t - st.lastSeen)) + 0.3;
+    const sp = Math.hypot(st.vx || 0, st.vy || 0);
+    const side = Math.min(vw, vh, Math.max(320, (d.y2 - d.y1) * 6, (d.x2 - d.x1) * 6, sp * 1.6));
+    if (side >= Math.max(vw, vh) * 0.8) return null;
+    const cx = (d.x1 + d.x2) / 2 + (st.vx || 0) * dt, cy = (d.y1 + d.y2) / 2 + (st.vy || 0) * dt * 0.5;
+    return { x: Math.min(Math.max(0, cx - side / 2), vw - side), y: Math.min(Math.max(0, cy - side / 2), vh - side), s: side };
+  }
   function sendDetect(t) {
-    const vw = video.videoWidth, vh = video.videoHeight, sc = 416 / Math.max(vw, vh);
-    lbx.fillStyle = 'rgb(114,114,114)'; lbx.fillRect(0, 0, 416, 416); lbx.drawImage(video, 0, 0, vw * sc, vh * sc);
+    const vw = video.videoWidth, vh = video.videoHeight; detCount++;
+    const roi = roiFor(vw, vh, t);
+    let sc;
+    lbx.fillStyle = 'rgb(114,114,114)'; lbx.fillRect(0, 0, 416, 416);
+    if (roi) { sc = 416 / roi.s; lbx.drawImage(video, roi.x, roi.y, roi.s, roi.s, 0, 0, 416, 416); }
+    else { sc = 416 / Math.max(vw, vh); lbx.drawImage(video, 0, 0, vw * sc, vh * sc); }
     const img = lbx.getImageData(0, 0, 416, 416), k = Math.min(1, 960 / vw);
     an.width = Math.round(vw * k); an.height = Math.round(vh * k); anx.drawImage(video, 0, 0, an.width, an.height);
-    pending = { id: ++reqId, t, k, vw, vh, img: anx.getImageData(0, 0, an.width, an.height) }; busy = true;
+    pending = { id: ++reqId, t, k, vw, vh, roi, img: anx.getImageData(0, 0, an.width, an.height) }; busy = true;
     worker.postMessage({ type: 'detect', id: pending.id, data: img, scale: sc, conf: 0.12 }, [img.data.buffer]);
   }
   function onResult(m) {
     busy = false; const p = pending; if (!p || p.id !== m.id || !running) return;
     detMs = m.ms; if (lastDetT && p.t > lastDetT) detFps = 0.8 * detFps + 0.2 / (p.t - lastDetT); lastDetT = p.t;
-    const st = tracker.update(m.dets, p.t);
+    const dets = p.roi ? m.dets.map(d => ({ ...d, x1: d.x1 + p.roi.x, x2: d.x2 + p.roi.x, y1: d.y1 + p.roi.y, y2: d.y2 + p.roi.y })) : m.dets;
+    const st = tracker.update(dets, p.t);
     // one wave = one ride: a new ride starts when we find a surfer after ~4 s with nobody
     if (session && st.visible) { if (p.t - session.lastSeen > 4) { session.ride++; session.rides.add(session.ride); dyn.reset(); } session.lastSeen = p.t; }
     lastDyn = dyn.update(st, p.t);
     const sc = scoreFrame(p.img, p.k, st, p.vw, p.vh, lastDyn);
     lastState = { ...st, det: st.det && { ...st.det }, t: p.t }; lastScore = sc;
     const ev = shutter.update(p.t, sc.total);
+    exposureLoop(p.img, st, p.t); autoZoom(st, p.t, p.vw, p.vh);
+    if (session && session.samples.length < 20000) {
+      const d = st.det;
+      session.samples.push([+(p.t - session.t0).toFixed(2), Math.round(sc.total), st.visible ? 1 : 0, d ? +((d.y2 - d.y1) / p.vh).toFixed(3) : 0,
+        d ? +((d.x1 + d.x2) / 2 / p.vw).toFixed(3) : 0, d ? +((d.y1 + d.y2) / 2 / p.vh).toFixed(3) : 0, zoomState.cur ? +zoomState.cur.toFixed(2) : 0,
+        +lastDyn.maneuver.toFixed(2), p.roi ? (p.roi.tile ? 2 : 1) : 0, Math.round(m.ms)]);
+    }
     updateHud();
     if (ev && st.det) takeShot(ev, lastState, lastDyn.kind);
   }
@@ -155,7 +281,10 @@
       framed: await toBlob(framed), full: await toBlob(full, 0.9), thumb: th.toDataURL('image/jpeg', 0.8), size: [framed.width, framed.height], fullSize: [vw, vh],
     };
     await putShot(shot);
-    if (session) session.shots++;
+    if (session) { session.shots++; session.shotLog.push([+(ev.peakT - session.t0).toFixed(2), Math.round(ev.score), kind || '', session.ride]); }
+    if (S.fullres && source === 'camera' && track && 'ImageCapture' in window) {
+      try { const b = await new ImageCapture(track).takePhoto(); shot.photo = b; await putShot(shot); } catch { }
+    }
     flyToGallery(shot.thumb); setBadge(+1, shot.thumb);
     if (!$('#gallery').hidden) renderGallery();
   }
@@ -222,7 +351,7 @@
     lastKind = lastDyn.kind;
     if (S.debug) {
       const p = lastScore.parts || {};
-      $('#debug-box').textContent = `detect ${Math.round(detMs)}ms · ${detFps.toFixed(1)}/s  maneuver ${lastDyn.maneuver.toFixed(2)} pose ${lastDyn.pose.toFixed(2)}\n` +
+      $('#debug-box').textContent = `detect ${Math.round(detMs)}ms · ${detFps.toFixed(1)}/s ${pending && pending.roi ? (pending.roi.tile ? 'search' : 'ROI') : 'full'}  zoom ${zoomState.cur ? zoomState.cur.toFixed(1) : '-'}  ${expo.manual ? 'sport ' + (expo.time / 10).toFixed(1) + 'ms iso' + expo.iso : 'auto-exp'}  maneuver ${lastDyn.maneuver.toFixed(2)}\n` +
         Object.entries(p).map(([k, v]) => `${k} ${v.toFixed(2)}`).join('  ') + (lastScore.sea !== undefined ? `  sea ${lastScore.sea.toFixed(2)}` : '');
     }
   }
@@ -266,7 +395,8 @@
       return;
     }
     tracker = new Tracker(); shutter = new Shutter(); dyn = new Dynamics(); lastState = null; lastScore = { total: 0, parts: {} };
-    session = { id: 's' + Date.now(), start: Date.now(), rides: new Set(), shots: 0, ride: 0, lastSeen: -1e9 };
+    session = { id: 's' + Date.now(), start: Date.now(), t0: now(), rides: new Set(), shots: 0, ride: 0, lastSeen: -1e9, samples: [], shotLog: [] };
+    startRecording();
     running = true; keepAwake(); click.primed = true;
     if (S.sound) try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { }
     document.body.dataset.run = '1'; $('#shutter').setAttribute('aria-label', 'עצור צילום אוטומטי');
@@ -279,17 +409,58 @@
     try { wakeLock && wakeLock.release(); } catch { }
     clearInterval(timerInt); $('#timer').hidden = true; $('#score-line').textContent = '';
     $('#ring-fill').style.strokeDashoffset = 289; refreshState();
+    if (session) saveSession(session);
     if (session && Date.now() - session.start > 5000) showSummary(session);
     session = null; $('#hint').hidden = false;
   }
   $('#shutter').addEventListener('click', start);
 
+  /* session recording (optional): lets Claude re-run the whole session on the computer afterwards */
+  let recorder = null, recChunks = [];
+  function startRecording() {
+    recorder = null; recChunks = [];
+    if (!S.record || source !== 'camera' || !stream || !window.MediaRecorder) return;
+    const types = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+    const type = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 2500000 });
+      recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+      recorder.start(5000);
+    } catch { recorder = null; }
+  }
+  async function stopRecording(id) {
+    if (!recorder) return null;
+    const r = recorder; recorder = null;
+    await new Promise(res => { r.onstop = res; try { r.stop(); } catch { res(); } });
+    if (!recChunks.length) return null;
+    const blob = new Blob(recChunks, { type: r.mimeType || 'video/webm' }); recChunks = [];
+    await putIn('recordings', { id, blob, type: blob.type });
+    return blob;
+  }
+  async function saveSession(se) {
+    const settings = track && track.getSettings ? track.getSettings() : {};
+    const rec = { id: se.id, start: new Date(se.start).toISOString(), minutes: +((Date.now() - se.start) / 60000).toFixed(1), rides: se.rides.size, shots: se.shots,
+      device: { ua: navigator.userAgent, video: [video.videoWidth, video.videoHeight], zoom: caps.zoom || null, sport: expo.manual, exposureTime: expo.time, iso: expo.iso, settings: { width: settings.width, height: settings.height, frameRate: settings.frameRate, zoom: settings.zoom } },
+      app: { threshold: RULES.shutter.threshold, autozoom: S.autozoom, quality: S.quality },
+      columns: ['t', 'score', 'visible', 'height', 'x', 'y', 'zoom', 'maneuver', 'roi', 'detect_ms'], samples: se.samples, shotsLog: se.shotLog };
+    await putIn('sessions', rec);
+    se.saved = rec;
+    se.recording = await stopRecording(se.id);
+  }
+  function shareSessionData(se) {
+    const f = new File([JSON.stringify(se.saved)], `surfcam_session_${se.saved.start.slice(0, 16).replace(/[:T]/g, '-')}.json`, { type: 'application/json' });
+    shareFiles([f]);
+  }
   function showSummary(se) {
     const min = Math.max(1, Math.round((Date.now() - se.start) / 60000));
     $('#sum-time').textContent = min; $('#sum-waves').textContent = se.rides.size; $('#sum-shots').textContent = se.shots;
     $('#sum-title').textContent = se.shots ? 'סשן מעולה 🤙' : 'הסשן הסתיים';
     $('#sum-text').textContent = se.shots ? 'התמונות כבר ערוכות. בגלריה אפשר לראות את הכי טובה מכל גל ולשמור לטלפון.'
       : 'לא היה רגע מספיק טוב לצילום. נסה להגדיל זום, או לבחור "הרבה" בהגדרות.';
+    $('#sum-data').onclick = () => se.saved && shareSessionData(se);
+    $('#sum-video').hidden = true;
+    const showVid = () => { if (se.recording) { $('#sum-video').hidden = false; $('#sum-video').onclick = () => shareFiles([new File([se.recording], `surfcam_session_${se.id}.${se.recording.type.includes('mp4') ? 'mp4' : 'webm'}`, { type: se.recording.type })]); } };
+    showVid(); setTimeout(showVid, 1500);
     $('#summary').hidden = false; $('#sum-gallery').focus();
   }
   $('#sum-close').addEventListener('click', () => { $('#summary').hidden = true; });
@@ -312,7 +483,7 @@
   $$('[data-close]').forEach(b => b.addEventListener('click', () => closeSheet(b.dataset.close)));
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
-    for (const id of ['viewer', 'confirm', 'summary', 'tour', 'gallery', 'settings']) if (!$('#' + id).hidden) { $('#' + id).hidden = true; break; }
+    for (const id of ['viewer', 'confirm', 'summary', 'tour', 'ready', 'gallery', 'settings']) if (!$('#' + id).hidden) { $('#' + id).hidden = true; break; }
   });
   $('#btn-settings').addEventListener('click', () => openSheet('settings'));
   $('#btn-gallery').addEventListener('click', () => { setBadge(null); openSheet('gallery'); });
@@ -328,9 +499,9 @@
   function setQuality(q) { S.quality = q; store.set('quality', q); $$('[data-q]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.q === q))); }
   $$('[data-q]').forEach(b => b.addEventListener('click', () => { setQuality(b.dataset.q); if (running && source === 'camera') { stopCamera(); startCamera(); } }));
   $('#zoom').addEventListener('input', e => applyZoom(e.target.value));
-  for (const k of ['sound', 'haptic', 'debug']) {
+  for (const k of ['sound', 'haptic', 'debug', 'autozoom', 'sport', 'record', 'fullres']) {
     const el = $('#' + k); el.checked = S[k];
-    el.addEventListener('change', () => { S[k] = el.checked; store.set(k, el.checked); if (k === 'debug') $('#debug-box').hidden = !el.checked; });
+    el.addEventListener('change', () => { S[k] = el.checked; store.set(k, el.checked); if (k === 'debug') $('#debug-box').hidden = !el.checked; if (k === 'sport' && track) setupCameraControls(); });
   }
   $('#debug-box').hidden = !S.debug;
 
@@ -377,7 +548,7 @@
   function setViewerImage() {
     const s = view[vi]; if (!s) return;
     const img = $('#viewer-img'); if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
-    const url = URL.createObjectURL(showFull ? s.full : s.framed); img.src = url; img.dataset.url = url;
+    const url = URL.createObjectURL(showFull ? (s.photo || s.full) : s.framed); img.src = url; img.dataset.url = url;
     img.alt = `תמונת גלישה, ציון ${Math.round(s.score)}`;
     const t = new Date(s.time), meta = $('#viewer-meta'); meta.textContent = '';
     const chips = [`ציון ${Math.round(s.score)}`, t.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' })];
@@ -403,8 +574,8 @@
     catch (e) { if (e && e.name === 'AbortError') return; }
     for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
   }
-  const fileOf = (s, which = 'framed') => new File([s[which]], `surf_${s.time.slice(0, 19).replace(/[:T]/g, '-')}${which === 'full' ? '_full' : ''}.jpg`, { type: 'image/jpeg' });
-  $('#btn-share').addEventListener('click', () => view[vi] && shareFiles([fileOf(view[vi], showFull ? 'full' : 'framed')]));
+  const fileOf = (s, which = 'framed') => new File([s[which]], `surf_${s.time.slice(0, 19).replace(/[:T]/g, '-')}${which === 'framed' ? '' : '_' + which}.jpg`, { type: 'image/jpeg' });
+  $('#btn-share').addEventListener('click', () => view[vi] && shareFiles([fileOf(view[vi], showFull ? (view[vi].photo ? 'photo' : 'full') : 'framed')]));
   $('#btn-delete').addEventListener('click', async () => {
     const s = view[vi]; if (!s) return; await delShot(s.id); await renderGallery();
     if (!view.length) { $('#viewer').hidden = true; return; } vi = Math.min(vi, view.length - 1); setViewerImage();
@@ -416,6 +587,53 @@
     for (const s of await allShots()) await delShot(s.id);
     $('#confirm').hidden = true; $('#gallery-thumb').hidden = true; setBadge(null); renderGallery();
   });
+
+  /* ------------------------------------------------------------ readiness check before the beach */
+  function check(list, state, title, text) { const li = document.createElement('li'); li.dataset.s = state; const b = document.createElement('b'); b.textContent = title; const sp = document.createElement('span'); sp.textContent = text; li.append(b, sp); list.append(li); return li; }
+  async function runReadiness() {
+    const list = $('#ready-list'); list.textContent = '';
+    const wait = check(list, 'wait', 'בודק…', 'פותח את המצלמה ומודד');
+    const wasRunning = running, hadStream = !!stream;
+    try { if (!stream) { await startCamera(); } } catch (e) { wait.remove(); check(list, 'bad', 'מצלמה', 'אין גישה למצלמה. אשר הרשאת מצלמה לדפדפן ונסה שוב.'); return; }
+    await new Promise(r => setTimeout(r, 600));
+    wait.remove();
+    const vw = video.videoWidth, vh = video.videoHeight;
+    check(list, vw >= 1280 ? 'ok' : 'warn', `מצלמה ${vw}×${vh}`, vw >= 1280 ? 'רזולוציה טובה.' : 'רזולוציה נמוכה. נסה איכות 4K בהגדרות, או טלפון אחר.');
+    check(list, caps.zoom ? 'ok' : 'warn', caps.zoom ? `זום עד ×${(+caps.zoom.max).toFixed(1)}` : 'אין זום מהדפדפן',
+      caps.zoom ? (S.autozoom ? 'זום אוטומטי פעיל.' : 'אפשר להפעיל זום אוטומטי בהגדרות.') : 'הטלפון לא נותן לשלוט בזום מהדפדפן (נפוץ באייפון). המערכת תחתוך את התמונה סביב הגולש, אבל כדאי לעמוד קרוב יותר לגלים.');
+    const sport = caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime;
+    check(list, sport ? 'ok' : 'warn', sport ? 'תריס מהיר זמין' : 'אין שליטה בתריס', sport ? (S.sport ? 'מצב ספורט פעיל: 1/1000 שנייה.' : 'אפשר להפעיל מצב ספורט בהגדרות.') : 'הטלפון בוחר תריס לבד. באור חזק זה בסדר. בבוקר מוקדם או בערב יכול להיות טשטוש בתנועה.');
+    check(list, caps.focusMode && caps.focusMode.includes('continuous') ? 'ok' : 'info', 'פוקוס', caps.focusMode && caps.focusMode.includes('continuous') ? 'פוקוס רציף פעיל, והמערכת מכוונת אותו לגולש.' : 'הטלפון מנהל את הפוקוס לבד.');
+    // detection speed on the live frame
+    if (ready) {
+      const t0 = performance.now(); let n = 0;
+      await new Promise(res => {
+        const one = () => {
+          const sc = 416 / Math.max(vw, vh); lbx.fillRect(0, 0, 416, 416); lbx.drawImage(video, 0, 0, vw * sc, vh * sc);
+          const img = lbx.getImageData(0, 0, 416, 416), id = -(++n);
+          const h = e => { if (e.data.type === 'result' && e.data.id === id) { worker.removeEventListener('message', h); n < 4 ? one() : res(); } };
+          worker.addEventListener('message', h); worker.postMessage({ type: 'detect', id, data: img, scale: sc, conf: 0.12 }, [img.data.buffer]);
+        };
+        if (busy) setTimeout(one, 500); else one();
+      });
+      const fps = 4 / ((performance.now() - t0) / 1000);
+      check(list, fps >= 2 ? 'ok' : fps >= 1 ? 'warn' : 'bad', `זיהוי ${fps.toFixed(1)} פעמים בשנייה`, fps >= 2 ? 'מהיר מספיק לתפוס את הרגע.' : 'איטי. סגור אפליקציות אחרות, וודא שהטלפון לא חם.');
+    } else check(list, 'warn', 'הזיהוי עוד נטען', 'חכה כמה שניות ובדוק שוב.');
+    try {
+      const b = await navigator.getBattery();
+      const pct = Math.round(b.level * 100);
+      check(list, pct >= 60 || b.charging ? 'ok' : pct >= 30 ? 'warn' : 'bad', `סוללה ${pct}%${b.charging ? ' (בטעינה)' : ''}`, pct >= 60 || b.charging ? 'מספיק לסשן.' : 'קח מטען נייד. שעה של סשן יכולה לגמור חצי סוללה.');
+    } catch { check(list, 'info', 'סוללה', 'הדפדפן לא מראה את מצב הסוללה. כדאי לצאת עם סוללה מלאה ומטען נייד.'); }
+    try {
+      const e = await navigator.storage.estimate(); const freeGB = (e.quota - e.usage) / 1e9;
+      check(list, freeGB >= 1 ? 'ok' : 'warn', `מקום פנוי לאפליקציה: ${freeGB >= 10 ? Math.round(freeGB) : freeGB.toFixed(1)}GB`, freeGB >= 1 ? 'מספיק לתמונות' + (S.record ? ' ולהקלטה.' : '.') : 'מעט מקום. שמור תמונות ישנות לגלריה ומחק אותן מהאפליקציה.');
+    } catch { }
+    check(list, 'wakeLock' in navigator ? 'ok' : 'warn', 'מסך דולק', 'wakeLock' in navigator ? 'המסך יישאר דולק בזמן הסשן.' : 'כבה נעילה אוטומטית של המסך בהגדרות הטלפון לפני הסשן.');
+    check(list, navigator.serviceWorker && navigator.serviceWorker.controller ? 'ok' : 'warn', 'עבודה בלי אינטרנט', navigator.serviceWorker && navigator.serviceWorker.controller ? 'האפליקציה שמורה בטלפון ותעבוד גם בלי קליטה.' : 'פתח את האפליקציה עוד פעם אחת עם אינטרנט, כדי שתישמר לעבודה בלי קליטה.');
+    if (!wasRunning && !hadStream) stopCamera();
+  }
+  $('#btn-ready').addEventListener('click', () => { closeSheet('settings'); openSheet('ready'); runReadiness(); });
+  $('#btn-ready-again').addEventListener('click', runReadiness);
 
   /* ------------------------------------------------------------ first-run tour */
   const sea = '<path d="M0 118 C40 104 70 98 110 106 S180 124 220 110 S300 92 340 104 L340 150 L0 150Z" fill="#1E6A74"/><path d="M0 128 C50 118 90 116 130 124 S210 138 250 126 S320 112 340 120" stroke="#BFF3EA" stroke-width="3" fill="none" opacity=".7"/>';

@@ -172,6 +172,16 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
 .stat span { font-size: 13px; color: var(--mist); }
 .confirm-card { place-self: center; }
 
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; border-radius: var(--r-m); overflow: hidden; }
+.checks li { background: rgba(244,248,247,.05); padding: var(--s3) var(--s4); display: grid; grid-template-columns: 28px 1fr; column-gap: var(--s3); row-gap: 2px; align-items: start; }
+.checks li::before { grid-row: span 2; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: var(--ink); content: "·"; background: var(--mist); }
+.checks li[data-s="ok"]::before { content: "✓"; background: var(--lagoon); }
+.checks li[data-s="warn"]::before { content: "!"; background: var(--sun); }
+.checks li[data-s="bad"]::before { content: "✕"; background: var(--coral); }
+.checks li[data-s="info"]::before { content: "i"; background: rgba(244,248,247,.25); color: var(--foam); }
+.checks li[data-s="wait"]::before { content: ""; border: 3px solid var(--line); border-top-color: var(--lagoon); background: none; animation: spin 1s linear infinite; }
+.checks b { font-weight: 600; }
+.checks span { color: var(--mist); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -231,6 +241,10 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
       <input id="zoom" type="range" min="1" max="10" step="0.1" value="1">
       <div class="help">הגדל עד שהגולש בגובה של אצבע על המסך.</div>
     </div>
+    <label class="row" id="autozoom-row" hidden><span class="row-top">זום אוטומטי<span class="switch"><input id="autozoom" type="checkbox"></span></span>
+      <span class="help">מתקרב עד שהגולש בערך רבע מגובה התמונה, ומתרחק אם הוא מתקרב לקצה. הזום הידני הוא נקודת הפתיחה.</span></label>
+    <label class="row" id="sport-row" hidden><span class="row-top">תריס מהיר (מצב ספורט)<span class="switch"><input id="sport" type="checkbox"></span></span>
+      <span class="help">1/1000 שנייה כדי להקפיא את הריסוס, כמו צלמי גלישה. אם חשוך מדי, חוזר לאוטומטי לבד.</span></label>
     <div class="row">
       <div class="row-top"><span id="mode-label">כמה לצלם</span></div>
       <div class="seg" role="group" aria-labelledby="mode-label">
@@ -252,6 +266,16 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
     <label class="row"><span class="row-top">רטט בכל צילום<span class="switch"><input id="haptic" type="checkbox"></span></span></label>
   </div>
 
+  <div class="group-title">בדיקה בים</div>
+  <div class="group">
+    <div class="row"><div class="row-top">בדיקת מוכנות</div><div class="help">בודק מצלמה, זום, תריס, מהירות זיהוי, סוללה ומקום פנוי, ואומר מה לסדר לפני שיוצאים.</div>
+      <div class="btns"><button id="btn-ready" class="btn primary" type="button">בדוק עכשיו</button></div></div>
+    <label class="row"><span class="row-top">הקלט את הסשן כסרטון<span class="switch"><input id="record" type="checkbox"></span></span>
+      <span class="help">בסוף אפשר לשלוח את הסרטון לניתוח ושיפור. בערך 19MB לדקה.</span></label>
+    <label class="row"><span class="row-top">תמונה ברזולוציה מלאה (ניסיוני)<span class="switch"><input id="fullres" type="checkbox"></span></span>
+      <span class="help">בכל צילום מצלם גם תמונה בכל הרזולוציה של החיישן. עובד בעיקר באנדרואיד, ויכול לעצור את התצוגה לרגע.</span></label>
+  </div>
+
   <div class="group-title">מתקדם</div>
   <div class="group">
     <div class="row">
@@ -262,6 +286,21 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
     <label class="row"><span class="row-top">מספרים על המסך (מצב בדיקה)<span class="switch"><input id="debug" type="checkbox"></span></span></label>
     <div class="row"><div class="btns"><button id="btn-tour" class="btn" type="button">הצג את ההדרכה שוב</button></div></div>
   </div>
+</section>
+
+<!-- readiness check -->
+<section id="ready" class="sheet" hidden aria-label="בדיקת מוכנות" role="dialog">
+  <div class="grab" aria-hidden="true"></div>
+  <div class="head"><h2>מוכנים לים?</h2><button class="x" data-close="ready" type="button" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <ul id="ready-list" class="checks" aria-live="polite"></ul>
+  <div class="group-title">לפני שיוצאים</div>
+  <ul class="checks static">
+    <li data-s="info"><b>חצובה יציבה</b><span>במקום גבוה, כמה שיותר קרוב לאזור שבו נשברים הגלים.</span></li>
+    <li data-s="info"><b>השמש מאחוריך</b><span>בוקר או אחר צהריים. בצהריים האור קשה והים מבריק.</span></li>
+    <li data-s="info"><b>מטען נייד</b><span>הזיהוי והמסך הדולק צורכים הרבה סוללה. שעה של סשן יכולה לגמור חצי סוללה.</span></li>
+    <li data-s="info"><b>צל לטלפון</b><span>טלפון חם מאט את עצמו. כובע, מגבת או מגן שמש עוזרים.</span></li>
+  </ul>
+  <div class="btns"><button id="btn-ready-again" class="btn" type="button">בדוק שוב</button></div>
 </section>
 
 <!-- gallery -->
@@ -304,6 +343,7 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
     <div class="stats"><div class="stat"><b id="sum-time">0</b><span>דקות</span></div><div class="stat"><b id="sum-waves">0</b><span>גלים</span></div><div class="stat"><b id="sum-shots">0</b><span>תמונות</span></div></div>
     <p id="sum-text"></p>
     <div class="btns"><button id="sum-gallery" class="btn primary" type="button" style="flex:1">לגלריה</button><button id="sum-close" class="btn" type="button">סגור</button></div>
+    <div class="btns"><button id="sum-data" class="btn" type="button">שלח את נתוני הסשן לניתוח</button><button id="sum-video" class="btn" type="button" hidden>שמור את הסרטון</button></div>
   </div>
 </div>
 

@@ -43,13 +43,17 @@ class Tracker {
       const ex = { x1: s.det.x1 + s.vx * dt, y1: s.det.y1 + s.vy * dt, x2: s.det.x2 + s.vx * dt, y2: s.det.y2 + s.vy * dt };
       let best = null, bs = 0;
       for (const d of all) {
-        const dist = Math.hypot(CX(d) - CX(ex), CY(d) - CY(ex)) / Math.max(H_(s.det), 1);
-        const sc = iou(ex, d) + Math.max(0, 1 - dist / 1.5) * 0.5;
+        // allow for prediction error: it grows with his speed and with the time since we last saw him
+        const tol = 1.5 * Math.max(H_(s.det), 1) + 0.6 * Math.hypot(s.vx, s.vy) * Math.min(dt, 2);
+        const dist = Math.hypot(CX(d) - CX(ex), CY(d) - CY(ex));
+        const sc = iou(ex, d) + Math.max(0, 1 - dist / tol) * 0.5;
         if (sc > bs) { bs = sc; best = d; }
       }
       if (best && bs > 0.15) chosen = best;
     }
-    if (!chosen && (!s.det || t - s.lastSeen > R.lostTimeout) && persons.length) {
+    // re-acquire quickly when a clear person shows up and our guy has not been seen for a moment
+    const clear = persons.some(d => d.score >= 0.5);
+    if (!chosen && persons.length && (!s.det || t - s.lastSeen > R.lostTimeout || (clear && t - s.lastSeen > 0.4))) {
       // standing riders are taller than wide; paddlers / heads in the water are wide or square
       chosen = persons.reduce((a, b) => (score(b) > score(a) ? b : a));
       this.prev = null; s.vx = s.vy = 0;
@@ -93,6 +97,8 @@ function slope(pts, i) {
 class Dynamics {
   constructor() { this.reset(); }
   reset() { this.hist = []; this.apexT = -1e9; this.apexS = 0; this.kind = ''; this.lastCheck = -1e9; }
+  // the camera zoomed by f around the picture centre: move the remembered path with it instead of forgetting it
+  rescale(f, cx, cy) { for (const p of this.hist) { p[1] = (p[1] - cx) * f + cx; p[2] = (p[2] - cy) * f + cy; p[3] *= f; } }
   update(st, t) {
     const A = RULES.action;
     if (!st.det || !st.visible) return { maneuver: 0, pose: 0, kind: '' };
