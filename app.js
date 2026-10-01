@@ -120,12 +120,12 @@
   function frameCrop(vw, vh, box, dir) {
     // what a zoomed-in camera would take: surfer ~40% of the height, on a third, room ahead
     const bh = box.y2 - box.y1, bw = box.x2 - box.x1;
-    if (bh / vh > 0.3) return null;
+    if (bh / vh > 0.22) return null; // already as close as the reference photos
     const ratio = vw >= vh ? 1.5 : 2 / 3;
     let ch = Math.max(bh / RULES.framing.subjectHeight, bh * 1.25), cw = Math.max(ch * ratio, bw * 1.4);
     ch = Math.max(ch, cw / ratio);
     if (cw > vw || ch > vh) { const s = Math.min(vw / cw, vh / ch); cw *= s; ch *= s; }
-    const cx = (box.x1 + box.x2) / 2, cy = (box.y1 + box.y2) / 2, fx = dir >= 0 ? 1 / 3 : 2 / 3;
+    const xp = RULES.framing.xPosition, cx = (box.x1 + box.x2) / 2, cy = (box.y1 + box.y2) / 2, fx = dir >= 0 ? xp : 1 - xp;
     let x0 = Math.min(Math.max(0, cx - fx * cw), vw - cw), y0 = Math.min(Math.max(0, cy - 0.55 * ch), vh - ch);
     x0 = Math.min(Math.max(x0, box.x2 + 0.05 * bw - cw), box.x1 - 0.05 * bw); y0 = Math.min(Math.max(y0, box.y2 + 0.08 * bh - ch), box.y1 - 0.08 * bh);
     return { x: Math.min(Math.max(0, x0), vw - cw), y: Math.min(Math.max(0, y0), vh - ch), w: cw, h: ch };

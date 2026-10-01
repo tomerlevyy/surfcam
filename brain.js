@@ -3,7 +3,7 @@
 const RULES = {
   conf: 0.30,
   lostTimeout: 2.0,
-  size: { w: 15, idealMin: 0.12, idealMax: 0.55, tooSmall: 0.03 },
+  size: { w: 15, idealMin: 0.12, idealMax: 0.45, tooSmall: 0.03 },
   thirds: { w: 15, tol: 0.12 },
   lead: { w: 15, ideal: 0.60, minSpeed: 0.15 },
   sharp: { w: 20, good: 180, bad: 40 },
@@ -16,7 +16,7 @@ const RULES = {
   riding: { minAspect: 0.95, penalty: 0.45 },
   boardBonus: 5,
   shutter: { threshold: 65, peakWindow: 0.4, cooldown: 1.5, must: 90 },
-  framing: { subjectHeight: 0.40 },
+  framing: { subjectHeight: 0.25, xPosition: 0.42 },   // reference photos: surfer ~22% of height, near the centre
 };
 
 const clip01 = x => Math.min(1, Math.max(0, x));
@@ -215,7 +215,9 @@ function scoreFrame(img, k, st, frameW, frameH, dyn) {
   const hf = H_(d) / frameH, S = R.size;
   parts.size = hf < S.tooSmall ? 0 : hf < S.idealMin ? (hf - S.tooSmall) / (S.idealMin - S.tooSmall) : hf <= S.idealMax ? 1 : clip01(1 - (hf - S.idealMax) / 0.3);
   const xf = CX(d) / frameW;
-  parts.thirds = clip01(1 - Math.min(Math.abs(xf - 1 / 3), Math.abs(xf - 2 / 3)) / (R.thirds.tol * 2));
+  // reference photos often centre the surfer: centre counts (almost) as much as a third
+  parts.thirds = Math.max(clip01(1 - Math.min(Math.abs(xf - 1 / 3), Math.abs(xf - 2 / 3)) / (R.thirds.tol * 2)),
+                          0.9 * clip01(1 - Math.abs(xf - 0.5) / (R.thirds.tol * 2)));
   if (st.speed < R.lead.minSpeed || Math.abs(st.vx) < 1e-6) parts.lead = 0.5;
   else {
     const ahead = st.vx > 0 ? frameW - d.x2 : d.x1, free = Math.max(1, frameW - d.x2 + d.x1);
