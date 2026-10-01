@@ -317,7 +317,7 @@
     th.width = Math.round(framed.width * tk); th.height = Math.round(framed.height * tk); th.getContext('2d').drawImage(framed, 0, 0, th.width, th.height);
     bmp.close();
     const shot = {
-      id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), time: new Date().toISOString(), score: ev.score, kind: kind || '',
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), time: new Date().toISOString(), score: ev.score, kind: kind || '', parts: lastScore && lastScore.parts ? Object.fromEntries(Object.entries(lastScore.parts).map(([k, v]) => [k, typeof v === 'number' ? +v.toFixed(3) : v])) : null,
       session: session ? session.id : 'test', ride: session ? session.ride : 0,
       framed: await toBlob(framed), full: await toBlob(full, 0.9), thumb: th.toDataURL('image/jpeg', 0.8), size: [framed.width, framed.height], fullSize: [vw, vh],
     };
@@ -569,6 +569,7 @@
     const host = $('#waves'); host.textContent = '';
     $('#gallery-empty').hidden = list.length > 0;
     $('#gallery-count').textContent = list.length ? `${list.length} תמונות` : '';
+    suggestThreshold(list);
     const groups = new Map();
     for (const s of view) { const k = s.session + ':' + s.ride; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
     for (const [, shots] of groups) {
@@ -581,6 +582,7 @@
       for (const s of shots) {
         const b = document.createElement('button'); b.className = 'tile' + (s.best && shots.length > 2 ? ' hero' : ''); b.type = 'button';
         b.setAttribute('aria-label', `תמונה, ציון ${Math.round(s.score)}${s.best ? ', הכי טובה בגל' : ''}${s.kind && MOMENTS[s.kind] ? ', ' + MOMENTS[s.kind] : ''}`);
+        if (s.rating) b.dataset.r = s.rating;
         const im = document.createElement('img'); im.src = s.thumb; im.alt = ''; im.loading = 'lazy';
         const sc = document.createElement('span'); sc.className = 'score'; sc.textContent = Math.round(s.score);
         b.append(im, sc);
@@ -590,6 +592,24 @@
       }
       sec.append(h, grid); host.append(sec);
     }
+  }
+
+  // learn from the ratings: which shutter threshold would have kept the liked photos and skipped the rest
+  function suggestThreshold(list) {
+    const r = list.filter(x => x.rating), up = r.filter(x => x.rating > 0), down = r.filter(x => x.rating < 0);
+    $('#tune').hidden = true;
+    if (r.length < 6 || down.length < 2) return;
+    let best = RULES.shutter.threshold, bestV = -1;
+    for (let t = 45; t <= 90; t++) {
+      const v = up.filter(x => x.score >= t).length * 1.0 + down.filter(x => x.score < t).length * 0.8;
+      if (v > bestV + 0.01) { bestV = v; best = t; }
+    }
+    if (Math.abs(best - RULES.shutter.threshold) < 4) return;
+    $('#tune-text').textContent = best > RULES.shutter.threshold
+      ? `לפי ${r.length} הדירוגים שלך, סף ${best} היה מדלג על רוב התמונות שלא אהבת.`
+      : `לפי ${r.length} הדירוגים שלך, סף ${best} היה תופס יותר תמונות שאתה אוהב.`;
+    $('#tune-yes').onclick = () => { setSens(best); $('#tune').hidden = true; };
+    $('#tune').hidden = false;
   }
 
   /* ------------------------------------------------------------ viewer */
@@ -606,7 +626,24 @@
     for (const c of chips) { const el = document.createElement('span'); el.className = 'chip'; el.textContent = c; meta.append(el); }
     $('#btn-full').textContent = showFull ? 'תמונה ממוסגרת' : 'תמונה מלאה';
     $('#prev').hidden = vi <= 0; $('#next').hidden = vi >= view.length - 1;
+    $('#rate-up').setAttribute('aria-pressed', String(s.rating === 1)); $('#rate-down').setAttribute('aria-pressed', String(s.rating === -1));
   }
+  async function rate(v) {
+    const s = view[vi]; if (!s) return;
+    s.rating = s.rating === v ? 0 : v; await putShot(s); setViewerImage();
+    if (S.haptic && navigator.vibrate) navigator.vibrate(15);
+  }
+  $('#rate-up').addEventListener('click', () => rate(1));
+  $('#rate-down').addEventListener('click', () => rate(-1));
+  $('#btn-ratings').addEventListener('click', async () => {
+    const l = await allShots();
+    const rows = l.map(x => ({ id: x.id, time: x.time, session: x.session, ride: x.ride, score: Math.round(x.score), kind: x.kind, rating: x.rating || 0, best: !!x.best, parts: x.parts || null, size: x.size, fullSize: x.fullSize }));
+    const rated = l.filter(x => x.rating);
+    // include small pictures of the rated photos so the reasons can be seen, not just the numbers
+    const thumbs = Object.fromEntries(rated.map(x => [x.id, x.thumb]));
+    const f = new File([JSON.stringify({ app: 'surfcam', exported: new Date().toISOString(), threshold: RULES.shutter.threshold, shots: rows, thumbs })], `surfcam_ratings_${new Date().toISOString().slice(0, 10)}.json`, { type: 'application/json' });
+    shareFiles([f]);
+  });
   function openViewer(i) { vi = i; showFull = false; $('#viewer').hidden = false; setViewerImage(); $('#viewer .x').focus(); }
   $('#prev').addEventListener('click', () => { if (vi > 0) { vi--; setViewerImage(); } });
   $('#next').addEventListener('click', () => { if (vi < view.length - 1) { vi++; setViewerImage(); } });

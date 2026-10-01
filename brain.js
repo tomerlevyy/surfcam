@@ -256,6 +256,10 @@ function scoreFrame(img, k, st, frameW, frameH, dyn) {
   if (H_(d) / Math.max(W_(d), 1) < R.riding.minAspect && !st.board) total *= R.riding.penalty;
   if (st.board) total = Math.min(100, total + R.boardBonus);
   if (parts.sharp < 0.25) total *= 0.5;
+  // a surfer touching the edge of the picture is usually cut off (a bad photo however good the moment)
+  const m = Math.min(d.x1, frameW - d.x2, d.y1, frameH - d.y2) / Math.max(1, Math.min(frameW, frameH));
+  parts.inframe = clip01(m / 0.02);
+  total *= 0.5 + 0.5 * parts.inframe;
   parts.action = act;
   return { total: Math.round(total * 10) / 10, parts, sea, sharpRaw: sh, sceneSharp: bg };
 }
