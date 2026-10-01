@@ -55,7 +55,7 @@
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...where, frameRate: { ideal: 30 }, ...q } }); }
     catch (e) { if (!S.lens) throw e; S.lens = ''; store.set('lens', ''); return startCamera(); } // that lens is gone: back to default
     video.srcObject = stream; video.muted = true; await video.play();
-    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom(); setupCameraControls(); setupLenses();
+    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom(); setupCameraControls(); setupLenses(); syncIdle();
   }
   // Phones with several back cameras (wide / ultra-wide / telephoto). iPhone Safari can't zoom from a web page,
   // but it does list the telephoto camera, so picking it is how an iPhone gets closer to distant surfers.
@@ -165,7 +165,7 @@
     if (lastState && lastState.det) lastState.det = sc(lastState.det);
     dyn.rescale(f, vw / 2, vh / 2);
   }
-  function stopCamera() { if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; track = null; }
+  function stopCamera() { if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; track = null; syncIdle(); }
   function setupZoom() {
     const caps = track && track.getCapabilities ? track.getCapabilities() : {};
     const row = $('#zoom-row'), z = $('#zoom');
@@ -187,7 +187,7 @@
   const now = () => (source === 'file' ? video.currentTime : performance.now() / 1000);
   async function pushFrame(t) {
     if (!video.videoWidth) return;
-    try { const bmp = await createImageBitmap(video); buffer.push({ t, bmp }); while (buffer.length && t - buffer[0].t > BUF_S) buffer.shift().bmp.close(); } catch { }
+    try { const bmp = await createImageBitmap(video); buffer.push({ t, bmp, z: zoomState.cur }); while (buffer.length && t - buffer[0].t > BUF_S) buffer.shift().bmp.close(); } catch { }
   }
 
   /* ------------------------------------------------------------ loop */
@@ -272,7 +272,7 @@
 
   /* ------------------------------------------------------------ the photo */
   const off = document.createElement('canvas'), offx = off.getContext('2d', { willReadFrequently: true });
-  const boxAt = (st, t) => { const dt = t - st.t, d = st.det; return { x1: d.x1 + st.vx * dt, y1: d.y1 + st.vy * dt, x2: d.x2 + st.vx * dt, y2: d.y2 + st.vy * dt }; };
+  const boxAt = (st, t) => { const dt = t - (st.lastSeen ?? st.t), d = st.det; return { x1: d.x1 + st.vx * dt, y1: d.y1 + st.vy * dt, x2: d.x2 + st.vx * dt, y2: d.y2 + st.vy * dt }; };
   function sharpOf(bmp, box) {
     const pad = 0.15, w = box.x2 - box.x1, h = box.y2 - box.y1, sx = Math.max(0, box.x1 - pad * w), sy = Math.max(0, box.y1 - pad * h);
     const sw = Math.min(bmp.width - sx, w * (1 + 2 * pad)), sh = Math.min(bmp.height - sy, h * (1 + 2 * pad));
@@ -298,7 +298,10 @@
 
   async function takeShot(ev, st, kind) {
     feedback(kind);
-    const cands = buffer.filter(f => Math.abs(f.t - ev.peakT) <= 0.4);
+    // only frames close to when we actually saw him (the box is trusted there) and taken at the same zoom
+    const seen = st.lastSeen ?? st.t;
+    let cands = buffer.filter(f => Math.abs(f.t - ev.peakT) <= 0.4 && Math.abs(f.t - seen) <= 0.3 && f.z === zoomState.cur);
+    if (!cands.length) cands = buffer.filter(f => f.z === zoomState.cur).sort((a, b) => Math.abs(a.t - seen) - Math.abs(b.t - seen)).slice(0, 1);
     if (!cands.length && buffer.length) cands.push(buffer[buffer.length - 1]);
     if (!cands.length) return;
     let best = cands[0], bs = -1;
@@ -372,7 +375,7 @@
   }
 
   /* ------------------------------------------------------------ HUD */
-  function setState(s, text) { $('#state').dataset.s = s; $('#state-text').textContent = text; }
+  function setState(s, text) { $('#state').dataset.s = s; $('#state-text').textContent = text; $('#state').hidden = s === 'idle' && text === 'מוכן'; }
   function refreshState() {
     if (!running) return setState('idle', ready ? 'מוכן' : 'מכין…');
     const st = lastState;
@@ -422,34 +425,33 @@
   /* ------------------------------------------------------------ start / stop */
   async function start() {
     if (running) return stop();
-    try { if (source !== 'file' || !video.src) await startCamera(); else await video.play(); }
+    try { if (source === 'file' && video.src) await video.play(); else if (!stream) await startCamera(); }
     catch (e) {
       setState('idle', 'אין גישה למצלמה');
-      $('#hint').hidden = false;
-      $('#hint').querySelector('strong').textContent = 'אין גישה למצלמה';
-      $('#hint').querySelector('span').textContent = e && e.name === 'NotAllowedError'
-        ? 'אשר גישה למצלמה בהגדרות הדפדפן. אם פתחת מתוך Claude, שם אין מצלמה: אפשר לבדוק עם סרטון בהגדרות.'
-        : 'לא הצלחתי לפתוח את המצלמה. אפשר לבדוק עם סרטון בהגדרות.';
+      showProblem('אין גישה למצלמה', e && e.name === 'NotAllowedError'
+        ? 'אשר גישה למצלמה בהגדרות הדפדפן ונסה שוב. אם פתחת מתוך Claude, שם אין מצלמה: אפשר לבדוק עם סרטון בהגדרות.'
+        : 'לא הצלחתי לפתוח את המצלמה. סגור אפליקציות אחרות שמשתמשות בה ונסה שוב.');
       return;
     }
+    showProblem(null);
     tracker = new Tracker(); shutter = new Shutter(); dyn = new Dynamics(); lastState = null; lastScore = { total: 0, parts: {} };
     session = { id: 's' + Date.now(), start: Date.now(), t0: now(), rides: new Set(), shots: 0, ride: 0, lastSeen: -1e9, samples: [], shotLog: [] };
     startRecording();
     running = true; keepAwake(); click.primed = true;
     if (S.sound) try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { }
     document.body.dataset.run = '1'; $('#shutter').setAttribute('aria-label', 'עצור צילום אוטומטי');
-    $('#hint').hidden = true; $('#timer').hidden = false; tickTimer(); timerInt = setInterval(tickTimer, 1000);
+    $('#timer').hidden = false; tickTimer(); timerInt = setInterval(tickTimer, 1000); syncIdle();
     refreshState(); updateHud();
   }
   function stop() {
     running = false; document.body.dataset.run = '0'; $('#shutter').setAttribute('aria-label', 'התחל צילום אוטומטי');
-    if (source === 'camera') stopCamera(); else video.pause();
+    if (source !== 'camera') video.pause();   // the camera stays on as a preview, so the next start is instant
     try { wakeLock && wakeLock.release(); } catch { }
     clearInterval(timerInt); $('#timer').hidden = true; $('#score-line').textContent = '';
     $('#ring-fill').style.strokeDashoffset = 289; refreshState();
     if (session) saveSession(session);
     if (session && Date.now() - session.start > 5000) showSummary(session);
-    session = null; $('#hint').hidden = false;
+    session = null; syncIdle(); armIdleOff(); renderHome();
   }
   $('#shutter').addEventListener('click', start);
 
@@ -492,6 +494,7 @@
   function showSummary(se) {
     const min = Math.max(1, Math.round((Date.now() - se.start) / 60000));
     $('#sum-time').textContent = min; $('#sum-waves').textContent = se.rides.size; $('#sum-shots').textContent = se.shots;
+    $('#sum-time-l').textContent = min === 1 ? 'דקה' : 'דקות'; $('#sum-waves-l').textContent = se.rides.size === 1 ? 'גל' : 'גלים'; $('#sum-shots-l').textContent = se.shots === 1 ? 'תמונה' : 'תמונות';
     $('#sum-title').textContent = se.shots ? 'סשן מעולה 🤙' : 'הסשן הסתיים';
     $('#sum-text').textContent = se.shots ? 'התמונות כבר ערוכות. בגלריה אפשר לראות את הכי טובה מכל גל ולשמור לטלפון.'
       : 'לא היה רגע מספיק טוב לצילום. נסה להגדיל זום, או לבחור "הרבה" בהגדרות.';
@@ -499,6 +502,13 @@
     $('#sum-video').hidden = true;
     const showVid = () => { if (se.recording) { $('#sum-video').hidden = false; $('#sum-video').onclick = () => shareFiles([new File([se.recording], `surfcam_session_${se.id}.${se.recording.type.includes('mp4') ? 'mp4' : 'webm'}`, { type: se.recording.type })]); } };
     showVid(); setTimeout(showVid, 1500);
+    $('#sum-hero').hidden = true;
+    allShots().then(l => {
+      const mine = l.filter(x => x.session === se.id); if (!mine.length) return;
+      const best = mine.reduce((a, b) => (b.score > a.score ? b : a));
+      const u = best.framed ? URL.createObjectURL(best.framed) : best.thumb; $('#sum-img').src = u; $('#sum-best').textContent = best.kind && MOMENTS[best.kind] ? `הכי טובה: ${MOMENTS[best.kind]}` : 'התמונה הכי טובה';
+      $('#sum-hero').hidden = false;
+    });
     $('#summary').hidden = false; $('#sum-gallery').focus();
   }
   $('#sum-close').addEventListener('click', () => { $('#summary').hidden = true; });
@@ -562,13 +572,14 @@
     const groups = new Map();
     for (const s of view) { const k = s.session + ':' + s.ride; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
     for (const [, shots] of groups) {
+      shots.sort((a, b) => (b.best ? 1 : 0) - (a.best ? 1 : 0));
       const sec = document.createElement('section'); sec.className = 'wave';
       const t = new Date(shots[shots.length - 1].time);
       const h = document.createElement('h3'); h.textContent = shots[0].ride ? `גל ${shots[0].ride}` : 'בדיקה';
       const sp = document.createElement('span'); sp.textContent = `${t.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })} · ${t.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`; h.append(' ', sp);
       const grid = document.createElement('div'); grid.className = 'grid';
       for (const s of shots) {
-        const b = document.createElement('button'); b.className = 'tile'; b.type = 'button';
+        const b = document.createElement('button'); b.className = 'tile' + (s.best && shots.length > 2 ? ' hero' : ''); b.type = 'button';
         b.setAttribute('aria-label', `תמונה, ציון ${Math.round(s.score)}${s.best ? ', הכי טובה בגל' : ''}${s.kind && MOMENTS[s.kind] ? ', ' + MOMENTS[s.kind] : ''}`);
         const im = document.createElement('img'); im.src = s.thumb; im.alt = ''; im.loading = 'lazy';
         const sc = document.createElement('span'); sc.className = 'score'; sc.textContent = Math.round(s.score);
@@ -692,10 +703,129 @@
     $$('#tour-dots i').forEach((d, k) => d.classList.toggle('on', k === i)); $('#tour-next').textContent = i === TOUR.length - 1 ? 'בוא נתחיל' : 'הבא';
     $('#tour').hidden = false; $('#tour-next').focus();
   }
-  function endTour() { $('#tour').hidden = true; S.toured = true; store.set('toured', true); }
+  function endTour() { $('#tour').hidden = true; S.toured = true; store.set('toured', true); previewIfAllowed(); }
   $('#tour-next').addEventListener('click', () => (ti < TOUR.length - 1 ? showTour(ti + 1) : endTour()));
   $('#tour-skip').addEventListener('click', endTour);
   $('#btn-tour').addEventListener('click', () => { closeSheet('settings'); showTour(0); });
+
+
+  /* ------------------------------------------------------------ home screen: light, last session, preview */
+  function showProblem(title, text) {
+    $('#notice').hidden = !title; if (!title) return;
+    $('#notice-title').textContent = title; $('#notice-text').textContent = text;
+    if (stream && source === 'camera') { $('#hint strong').textContent = title; $('#hint span').textContent = text; }
+  }
+  function syncIdle() {
+    const preview = !!stream && source === 'camera' && !running;
+    document.body.dataset.preview = preview ? '1' : '0';
+    $('#hint').hidden = !preview;
+    $('#light-chip').hidden = !preview;
+  }
+  // an idle preview still uses battery: turn the camera off after 3 minutes without a session
+  let idleOff = 0;
+  function armIdleOff() { clearTimeout(idleOff); idleOff = setTimeout(() => { if (!running && source === 'camera') stopCamera(); }, 180000); }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && !running && source === 'camera') stopCamera(); });
+
+  // where the sun is: decides whether the light is good for surf photos right now
+  let geo = { lat: 32.08, lon: 34.77 };   // Tel Aviv until we know better
+  function sunElevation(date, lat, lon) {
+    const r = Math.PI / 180, d = date.getTime() / 86400000 - 10957.5;  // days since J2000
+    const g = (357.529 + 0.98560028 * d) * r, q = 280.459 + 0.98564736 * d;
+    const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * r, e = (23.439 - 3.6e-7 * d) * r;
+    const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+    const gmst = (18.697374558 + 24.06570982441908 * d) % 24, H = (gmst * 15 + lon) * r - ra;
+    return Math.asin(Math.sin(lat * r) * Math.sin(dec) + Math.cos(lat * r) * Math.cos(dec) * Math.cos(H)) / r;
+  }
+  const hhmm = d => d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  function inWords(min) {
+    if (min < 1) return 'עכשיו'; if (min < 60) return `בעוד ${Math.round(min)} דקות`;
+    const h = Math.floor(min / 60), m = Math.round(min % 60);
+    const hs = h === 1 ? 'שעה' : h === 2 ? 'שעתיים' : `${h} שעות`;
+    return m ? `בעוד ${hs} ו-${m} דקות` : `בעוד ${hs}`;
+  }
+  function nextCross(now, level, dir, lat, lon) {   // first minute the sun crosses `level` going up (+1) or down (-1)
+    let prev = sunElevation(now, lat, lon);
+    for (let m = 1; m <= 1440; m++) {
+      const t = new Date(now.getTime() + m * 60000), e = sunElevation(t, lat, lon);
+      if ((dir > 0 && prev < level && e >= level) || (dir < 0 && prev > level && e <= level)) return t;
+      prev = e;
+    }
+    return null;
+  }
+  function lightNow() {
+    const now = new Date(), { lat, lon } = geo, e = sunElevation(now, lat, lon);
+    const rising = sunElevation(new Date(now.getTime() + 600000), lat, lon) > e;
+    const at = (lvl, dir) => nextCross(now, lvl, dir, lat, lon), mins = t => (t - now) / 60000;
+    if (e < -6) { const sr = at(-0.8, 1); return { p: 'night', chip: 'חשוך', title: 'חשוך מדי לצילום', sub: sr ? `הזריחה ב-${hhmm(sr)}. שעה אחריה האור הכי יפה.` : '' }; }
+    if (e < 0) return rising ? { p: 'twilight', chip: 'עוד מעט אור', title: 'השמש עוד רגע עולה', sub: 'עוד כמה דקות מתחילה שעת הזהב של הבוקר. זה זמן מצוין להתמקם.' }
+      : { p: 'twilight', chip: 'האור נגמר', title: 'השמש שקעה', sub: 'עכשיו כבר חשוך מדי לתמונות חדות. מחר בבוקר?' };
+    if (e < 10) { const end = rising ? at(10, 1) : at(-0.8, -1); return { p: 'golden', chip: 'שעת זהב', title: 'שעת זהב עכשיו', sub: end ? `האור הכי יפה ביום, עד ${hhmm(end)}. קדימה לים.` : 'האור הכי יפה ביום. קדימה לים.' }; }
+    if (e < 35) {
+      if (rising) return { p: 'soft', chip: 'אור טוב', title: 'אור בוקר טוב', sub: 'אור רך מהצד, גלים מוארים. זמן מעולה לצלם.' };
+      const g = at(10, -1); return { p: 'soft', chip: 'אור טוב', title: 'אור טוב לצילום', sub: g ? `שעת זהב ${inWords(mins(g))}, ב-${hhmm(g)}.` : 'אור רך, זמן טוב לצלם.' };
+    }
+    const g = at(10, -1);
+    return { p: 'harsh', chip: 'אור צהריים', title: 'אור חזק של צהריים', sub: g ? `הים מבריק ויש צללים קשים. שעת זהב ${inWords(mins(g))}, ב-${hhmm(g)}.` : 'הים מבריק ויש צללים קשים.' };
+  }
+  function drawSunPath() {
+    const W = 320, Hh = 92, base = 70, k = 0.95, now = new Date(), { lat, lon } = geo;
+    const day = new Date(now); day.setHours(0, 0, 0, 0);
+    // Hebrew reads right to left, so the day runs right (morning) to left (evening)
+    const X = m => W - m / 1440 * W;
+    const pts = []; for (let m = 0; m <= 1440; m += 10) pts.push([X(m), sunElevation(new Date(day.getTime() + m * 60000), lat, lon), m]);
+    const y = e => base - Math.max(-12, e) * k;
+    const path = arr => arr.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + y(p[1]).toFixed(1)).join('');
+    const above = pts.filter(p => p[1] > -1);
+    const golds = []; let run = [];
+    for (const p of pts) { if (p[1] > -1 && p[1] < 10) run.push(p); else if (run.length) { golds.push(run); run = []; } }
+    if (run.length) golds.push(run);
+    const nm = (now - day) / 60000, ne = sunElevation(now, lat, lon), nx = X(nm);
+    const riseT = nextCross(day, -0.8, 1, lat, lon), setT = nextCross(day, -0.8, -1, lat, lon);
+    const at = T => T && T - day < 86400000 ? [X((T - day) / 60000), 0, (T - day) / 60000, T] : null;
+    const rise = at(riseT), set = at(setT);
+    const lab = (p, txt) => p ? `<text x="${p[0].toFixed(0)}" y="${base + 16}" text-anchor="middle">${txt}</text>` : '';
+    const tOf = p => hhmm(p[3]);
+    $('#sunpath').innerHTML = `<line class="hz" x1="0" y1="${base}" x2="${W}" y2="${base}"/>` +
+      (above.length ? `<path class="day" d="${path(above)}"/>` : '') +
+      golds.filter(g => g.length > 1).map(g => `<path class="gold" d="${path(g)}"/>`).join('') +
+      lab(rise, rise ? tOf(rise) : '') + lab(set, set ? tOf(set) : '') +
+      (ne > -1 ? `<circle class="halo" cx="${nx.toFixed(1)}" cy="${y(ne).toFixed(1)}" r="13"/><circle class="now" cx="${nx.toFixed(1)}" cy="${y(ne).toFixed(1)}" r="6.5"/>`
+        : `<circle class="moon" cx="${nx.toFixed(1)}" cy="${(base - 46).toFixed(1)}" r="5"/>`);
+  }
+  async function renderHome() {
+    const L = lightNow();
+    $('#light').dataset.p = L.p; $('#light-title').textContent = L.title; $('#light-sub').textContent = L.sub;
+    const chip = $('#light-chip'); chip.dataset.p = L.p; chip.querySelector('span').textContent = L.chip;
+    drawSunPath();
+    const shots = await allShots();
+    if (!shots.length) { $('#last').hidden = true; return; }
+    const bySes = new Map(); for (const x of shots) { if (!bySes.has(x.session)) bySes.set(x.session, []); bySes.get(x.session).push(x); }
+    const latest = [...bySes.values()].sort((a, b) => (a[0].time < b[0].time ? 1 : -1))[0];
+    const best = latest.reduce((a, b) => (b.score > a.score ? b : a));
+    const waves = new Set(latest.map(x => x.ride)).size, when = new Date(best.time);
+    const today = when.toDateString() === new Date().toDateString();
+    $('#last-img').src = best.thumb;
+    $('#last-title').textContent = today ? 'הסשן של היום' : `הסשן מ-${when.toLocaleDateString('he-IL', { weekday: 'long' })}`;
+    $('#last-sub').textContent = `${latest.length} ${latest.length === 1 ? 'תמונה' : 'תמונות'}, ${waves} ${waves === 1 ? 'גל' : 'גלים'}`;
+    $('#last').setAttribute('aria-label', `${$('#last-title').textContent}: ${$('#last-sub').textContent}. פתח בגלריה`);
+    $('#last').hidden = false;
+  }
+  $('#last').addEventListener('click', () => { setBadge(null); openSheet('gallery'); });
+  setInterval(() => { if (!running) renderHome(); }, 60000);
+  async function locate() {
+    try {
+      const p = navigator.permissions && await navigator.permissions.query({ name: 'geolocation' });
+      if (!p || p.state !== 'granted') return;   // never ask just for this
+      navigator.geolocation.getCurrentPosition(pos => { geo = { lat: pos.coords.latitude, lon: pos.coords.longitude }; renderHome(); }, () => { }, { maximumAge: 3600000, timeout: 8000 });
+    } catch { }
+  }
+  async function previewIfAllowed() {
+    try {
+      const p = navigator.permissions && await navigator.permissions.query({ name: 'camera' });
+      if (!p || p.state !== 'granted' || stream || running) return;
+      await startCamera(); armIdleOff();
+    } catch { }
+  }
 
   /* ------------------------------------------------------------ boot */
   (async () => {
@@ -704,10 +834,11 @@
     const l = await allShots();
     if (l.length) { l.sort((a, b) => (a.time < b.time ? 1 : -1)); $('#gallery-thumb').src = l[0].thumb; $('#gallery-thumb').hidden = false; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      $('#hint').querySelector('span').textContent = 'הדפדפן הזה לא נותן גישה למצלמה. אפשר לבדוק עם סרטון בהגדרות.';
+      showProblem('אין מצלמה בדפדפן הזה', 'פתח את הקישור בכרום או בספארי בטלפון. אפשר גם לבדוק עם סרטון בהגדרות.');
     }
     if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
-    if (!S.toured) showTour(0);
+    renderHome(); locate();
+    if (!S.toured) showTour(0); else previewIfAllowed();
     refreshState(); requestAnimationFrame(loop);
   })();
 

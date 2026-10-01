@@ -50,19 +50,25 @@ button { border: 0; background: none; cursor: pointer; padding: 0; }
 .top { position: fixed; inset-inline: 0; top: 0; padding: calc(env(safe-area-inset-top, 0px) + var(--s3)) var(--s4) 0; display: flex; align-items: center; gap: var(--s3); }
 .mark { display: flex; align-items: center; gap: var(--s2); font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
 .mark svg { width: 26px; height: 26px; }
+.mark { margin-inline-end: auto; }
+.mark .word { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+body[data-run="1"] .mark .word, body[data-preview="1"] .mark .word { display: none; }
 .chip { display: inline-flex; align-items: center; gap: var(--s2); min-height: 34px; padding: 0 var(--s3); border-radius: 999px; background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 14px; font-weight: 500; color: var(--mist); white-space: nowrap; }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 #state[data-s="track"] { color: var(--ink); background: var(--lagoon); }
 #state[data-s="shot"] { color: var(--ink); background: var(--sun); }
 #state[data-s="search"] .dot { animation: blink 1.4s ease-in-out infinite; }
 @keyframes blink { 50% { opacity: .25; } }
-#timer { margin-inline-start: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+#timer { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #debug-box { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); inset-inline: var(--s4); font: 11px/1.4 var(--mono); color: var(--mist); white-space: pre-wrap; background: var(--glass); border-radius: var(--r-s); padding: var(--s2) var(--s3); direction: ltr; text-align: left; }
 
 /* ---- idle hint */
-#hint { position: fixed; inset-inline: var(--s4); top: 40%; transform: translateY(-50%); display: grid; justify-items: center; gap: var(--s2); text-align: center; pointer-events: none; }
-#hint strong { font-size: 22px; font-weight: 700; letter-spacing: -.01em; text-shadow: 0 2px 10px rgba(0,0,0,.6); }
-#hint span { color: var(--mist); font-size: 15px; text-shadow: 0 1px 6px rgba(0,0,0,.8); max-width: 30ch; }
+#hint { position: fixed; inset-inline: var(--s4); bottom: calc(env(safe-area-inset-bottom, 0px) + 176px); max-width: 420px; margin-inline: auto; display: grid; justify-items: center; gap: 2px; text-align: center; pointer-events: none; padding: var(--s3) var(--s4); border-radius: var(--r-m); background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+#hint strong { font-size: 17px; font-weight: 700; letter-spacing: -.01em; text-shadow: 0 2px 10px rgba(0,0,0,.6); }
+#hint span { color: var(--mist); font-size: 14px; max-width: 36ch; }
+.notice { border-radius: var(--r-m); padding: var(--s3) var(--s4); background: rgba(255,125,110,.12); box-shadow: inset 0 0 0 1px rgba(255,125,110,.35); display: grid; gap: 2px; }
+.notice b { color: var(--coral); }
+.notice span { color: var(--foam); font-size: 14px; }
 
 /* ---- moment tag */
 #moment { position: fixed; inset-inline: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 158px); display: flex; justify-content: center; pointer-events: none; }
@@ -141,6 +147,7 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
 .tile { position: relative; aspect-ratio: 1; border-radius: var(--r-s); overflow: hidden; background: var(--ink-2); max-width: 100%; }
 .tile img { width: 100%; height: 100%; object-fit: cover; }
+.tile.hero { grid-column: span 2; grid-row: span 2; }
 .tile .score { position: absolute; bottom: 6px; inset-inline-start: 6px; font: 700 12px var(--mono); background: var(--glass-strong); border-radius: 7px; padding: 1px 6px; }
 .tile .star { position: absolute; top: 6px; inset-inline-end: 6px; width: 26px; height: 26px; border-radius: 50%; background: var(--sun); color: var(--ink); display: grid; place-items: center; }
 .tile .star svg { width: 15px; height: 15px; }
@@ -182,6 +189,45 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
 .checks li[data-s="wait"]::before { content: ""; border: 3px solid var(--line); border-top-color: var(--lagoon); background: none; animation: spin 1s linear infinite; }
 .checks b { font-weight: 600; }
 .checks span { color: var(--mist); font-size: 14px; }
+
+/* ---- home (idle, before the camera is on) */
+#home { position: fixed; inset-inline: 0; top: calc(env(safe-area-inset-top, 0px) + 62px); bottom: calc(env(safe-area-inset-bottom, 0px) + 150px); overflow: auto; padding: var(--s2) var(--s4) var(--s4); display: grid; align-content: center; gap: var(--s3); max-width: 480px; margin-inline: auto; }
+body[data-run="1"] #home, body[data-preview="1"] #home { display: none; }
+.light { position: relative; border-radius: var(--r-l); padding: var(--s4) var(--s4) var(--s4); background: linear-gradient(180deg, var(--sky-a) 0%, var(--sky-b) 100%); overflow: hidden; display: grid; gap: var(--s1); }
+.light[data-p="night"] { --sky-a: #0E1B2A; --sky-b: #13232A; }
+.light[data-p="twilight"] { --sky-a: #2A2A4A; --sky-b: #3B2F44; }
+.light[data-p="golden"] { --sky-a: #5A3A2A; --sky-b: #2B3A3A; }
+.light[data-p="soft"] { --sky-a: #1D4A5A; --sky-b: #16343C; }
+.light[data-p="harsh"] { --sky-a: #2B5F73; --sky-b: #1A3B45; }
+#sunpath { width: 100%; height: 92px; display: block; margin-bottom: var(--s2); }
+#sunpath .hz { stroke: rgba(244,248,247,.35); stroke-width: 1.5; }
+#sunpath .day { stroke: rgba(244,248,247,.45); stroke-width: 2; fill: none; stroke-dasharray: 2 5; stroke-linecap: round; }
+#sunpath .gold { stroke: var(--sun); stroke-width: 3.5; fill: none; stroke-linecap: round; opacity: .85; }
+#sunpath .now { fill: var(--sun); }
+#sunpath .halo { fill: var(--sun); opacity: .22; }
+#sunpath .moon { fill: var(--mist); }
+#sunpath text { fill: rgba(244,248,247,.6); font: 500 11px var(--sans); }
+.light h2 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.015em; line-height: 1.15; text-wrap: balance; }
+.light p { margin: 0; color: rgba(244,248,247,.78); font-size: 15px; }
+.last { display: grid; grid-template-columns: 76px 1fr auto; align-items: center; gap: var(--s3); padding: var(--s2); padding-inline-end: var(--s4); border-radius: var(--r-m); background: rgba(244,248,247,.06); text-align: start; }
+.last img { width: 76px; height: 76px; border-radius: 13px; object-fit: cover; background: var(--ink-2); }
+.last b { display: block; font-weight: 600; }
+.last span { color: var(--mist); font-size: 14px; }
+.last svg { width: 20px; height: 20px; color: var(--mist); }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); counter-reset: st; }
+.steps li { counter-increment: st; border-radius: var(--r-m); background: rgba(244,248,247,.04); padding: var(--s3); display: grid; gap: var(--s1); font-size: 14px; line-height: 1.3; color: var(--mist); }
+.steps li::before { content: counter(st); width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; background: rgba(244,248,247,.1); color: var(--foam); }
+.steps li:last-child::before { background: var(--sun); color: var(--ink); }
+.steps b { color: var(--foam); font-weight: 600; font-size: 15px; }
+#light-chip { gap: 6px; }
+#light-chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--sun); }
+#light-chip[data-p="night"] i, #light-chip[data-p="twilight"] i { background: var(--mist); }
+body[data-run="1"] #light-chip { display: none; }
+.dock .side { flex-direction: column; align-items: center; gap: 6px; }
+.tool-label { font-size: 12px; font-weight: 500; color: var(--mist); text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+.sum-hero { position: relative; border-radius: var(--r-m); overflow: hidden; aspect-ratio: 3 / 2; background: var(--ink); margin: calc(var(--s5) * -1) calc(var(--s5) * -1) 0; border-radius: var(--r-l) var(--r-l) 0 0; }
+.sum-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sum-hero .chip { position: absolute; bottom: var(--s3); inset-inline-start: var(--s3); color: var(--ink); background: var(--sun); font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -193,13 +239,33 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
 <header class="top">
   <div class="mark" aria-hidden="true">
     <svg viewBox="0 0 32 32" fill="none"><circle cx="21" cy="10" r="4.5" fill="#FFC83D"/><path d="M3 22c5-9 11-11 16-5 2 2.5 5 3 10 1" stroke="#6FE3D1" stroke-width="3" stroke-linecap="round"/></svg>
+    <span class="word">מצלמת גולשים</span>
   </div>
   <span id="state" class="chip" data-s="idle" role="status" aria-live="polite"><span class="dot"></span><span id="state-text">מוכן</span></span>
+  <span id="light-chip" class="chip" hidden><i></i><span></span></span>
   <span id="timer" class="chip" hidden>00:00</span>
 </header>
 <div id="debug-box" hidden></div>
 
-<div id="hint"><strong>כוון את הטלפון לגולשים</strong><span>שים על חצובה, השמש מאחוריך, ולחץ על הכפתור הצהוב. מכאן היא מצלמת לבד.</span></div>
+<main id="home" aria-label="מסך פתיחה">
+  <section class="notice" id="notice" hidden role="alert"><b id="notice-title"></b><span id="notice-text"></span></section>
+  <section class="light" id="light" data-p="soft" aria-live="polite">
+    <svg id="sunpath" viewBox="0 0 320 92" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <h2 id="light-title">בודק את האור…</h2>
+    <p id="light-sub"></p>
+  </section>
+  <button class="last" id="last" type="button" hidden>
+    <img id="last-img" alt="">
+    <span><b id="last-title">הסשן האחרון</b><span id="last-sub"></span></span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+  </button>
+  <ol class="steps" aria-label="איך מתחילים">
+    <li><b>חצובה</b>גבוה, מול הגלים</li>
+    <li><b>שמש מאחור</b>הגולשים מוארים</li>
+    <li><b>התחל</b>והיא מצלמת לבד</li>
+  </ol>
+</main>
+<div id="hint" hidden><strong>כוון לאזור שבו נשברים הגלים</strong><span>כשהכול בתמונה, לחץ התחל. מכאן היא מצלמת לבד.</span></div>
 <div id="moment" aria-hidden="true"><span class="chip" id="moment-text"></span></div>
 <div id="loading"><span class="chip"><span class="spin"></span>מכין את הזיהוי…</span></div>
 
@@ -210,6 +276,7 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
       <img id="gallery-thumb" alt="" hidden>
       <span class="badge" id="badge" hidden>0</span>
     </button>
+    <span class="tool-label" aria-hidden="true">גלריה</span>
   </div>
   <div class="shutter-wrap">
     <button id="shutter" type="button" aria-label="התחל צילום אוטומטי">
@@ -226,6 +293,7 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
     <button id="btn-settings" class="tool" type="button" aria-label="הגדרות">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg>
     </button>
+    <span class="tool-label" aria-hidden="true">הגדרות</span>
   </div>
 </nav>
 
@@ -344,8 +412,9 @@ input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
 <!-- session summary -->
 <div id="summary" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sum-title">
   <div class="card">
+    <div class="sum-hero" id="sum-hero" hidden><img id="sum-img" alt="התמונה הכי טובה מהסשן"><span class="chip" id="sum-best"></span></div>
     <h2 id="sum-title">סשן מעולה 🤙</h2>
-    <div class="stats"><div class="stat"><b id="sum-time">0</b><span>דקות</span></div><div class="stat"><b id="sum-waves">0</b><span>גלים</span></div><div class="stat"><b id="sum-shots">0</b><span>תמונות</span></div></div>
+    <div class="stats"><div class="stat"><b id="sum-time">0</b><span id="sum-time-l">דקות</span></div><div class="stat"><b id="sum-waves">0</b><span id="sum-waves-l">גלים</span></div><div class="stat"><b id="sum-shots">0</b><span id="sum-shots-l">תמונות</span></div></div>
     <p id="sum-text"></p>
     <div class="btns"><button id="sum-gallery" class="btn primary" type="button" style="flex:1">לגלריה</button><button id="sum-close" class="btn" type="button">סגור</button></div>
     <div class="btns"><button id="sum-data" class="btn" type="button">שלח את נתוני הסשן לניתוח</button><button id="sum-video" class="btn" type="button" hidden>שמור את הסרטון</button></div>

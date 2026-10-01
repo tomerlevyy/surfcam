@@ -1,5 +1,5 @@
 // Offline support: after the first visit the app works on the beach without internet.
-const CACHE = 'surfcam-v8';
+const CACHE = 'surfcam-v9';
 const FILES = ['./', 'index.html', 'app.js', 'brain.js', 'edit.js', 'worker.js', 'rubik.woff', 'opencv.js', 'opencv_js.wasm', 'yolox_nano.onnx', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
