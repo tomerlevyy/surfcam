@@ -13,6 +13,7 @@
     sens: store.get('sens', 65), quality: store.get('quality', '1080'), debug: store.get('debug', false),
     sound: store.get('sound', true), haptic: store.get('haptic', true), toured: store.get('toured', false),
     autozoom: store.get('autozoom', true), sport: store.get('sport', true), record: store.get('record', false), fullres: store.get('fullres', false),
+    lens: store.get('lens', ''),
   };
   RULES.shutter.threshold = S.sens;
 
@@ -50,10 +51,47 @@
   let stream = null, track = null, running = false, source = 'camera';
   async function startCamera() {
     const q = S.quality === '4k' ? { width: { ideal: 3840 }, height: { ideal: 2160 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } };
-    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, frameRate: { ideal: 30 }, ...q } });
+    const where = S.lens ? { deviceId: { exact: S.lens } } : { facingMode: { ideal: 'environment' } };
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...where, frameRate: { ideal: 30 }, ...q } }); }
+    catch (e) { if (!S.lens) throw e; S.lens = ''; store.set('lens', ''); return startCamera(); } // that lens is gone: back to default
     video.srcObject = stream; video.muted = true; await video.play();
-    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom(); setupCameraControls();
+    track = stream.getVideoTracks()[0]; source = 'camera'; setupZoom(); setupCameraControls(); setupLenses();
   }
+  // Phones with several back cameras (wide / ultra-wide / telephoto). iPhone Safari can't zoom from a web page,
+  // but it does list the telephoto camera, so picking it is how an iPhone gets closer to distant surfers.
+  function lensName(label, i) {
+    const l = (label || '').toLowerCase();
+    if (/tele/.test(l)) return 'טלה';
+    if (/ultra|wide angle|רחב/.test(l)) return 'רחב';
+    if (/dual|triple/.test(l)) return 'אוטומטי';
+    if (/back camera$|^back$|מצלמה אחורית$/.test(l)) return 'רגילה';
+    return 'מצלמה ' + (i + 1);
+  }
+  async function setupLenses() {
+    const row = $('#lens-row'), box = $('#lens');
+    let devs = [];
+    try { devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && !/front|user|facetime|קדמית/i.test(d.label)); } catch { }
+    if (devs.length < 2 || devs.some(d => !d.label)) { row.hidden = true; return; } // no names until camera permission
+    const cur = track && track.getSettings ? track.getSettings().deviceId : '';
+    const opts = [{ id: '', name: 'ברירת מחדל' }, ...devs.map((d, i) => ({ id: d.deviceId, name: lensName(d.label, i) }))]
+      .filter((o, i, a) => a.findIndex(x => x.name === o.name) === i).slice(0, 4);
+    box.innerHTML = '';
+    for (const o of opts) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = o.name;
+      b.setAttribute('aria-pressed', String(o.id === S.lens || (!S.lens && !o.id)));
+      b.addEventListener('click', async () => {
+        if (o.id === S.lens) return;
+        S.lens = o.id; store.set('lens', o.id);
+        if (!stream) return setupLenses();
+        stopCamera(); tracker.s.det = null; dyn.reset();
+        try { await startCamera(); } catch { }
+      });
+      box.appendChild(b);
+    }
+    row.hidden = false;
+    lensInfo = { count: devs.length, tele: devs.some(d => /tele/i.test(d.label)), usingTele: devs.some(d => d.deviceId === (S.lens || cur) && /tele/i.test(d.label)) };
+  }
+  let lensInfo = { count: 1, tele: false, usingTele: false };
   let caps = {};
   const expo = { manual: false, time: 0, iso: 0, lastAdjust: 0, lastPoi: 0 };
   function setupCameraControls() {
@@ -485,7 +523,7 @@
     if (e.key !== 'Escape') return;
     for (const id of ['viewer', 'confirm', 'summary', 'tour', 'ready', 'gallery', 'settings']) if (!$('#' + id).hidden) { $('#' + id).hidden = true; break; }
   });
-  $('#btn-settings').addEventListener('click', () => openSheet('settings'));
+  $('#btn-settings').addEventListener('click', () => { openSheet('settings'); setupLenses(); });
   $('#btn-gallery').addEventListener('click', () => { setBadge(null); openSheet('gallery'); });
 
   /* settings controls */
@@ -599,8 +637,11 @@
     wait.remove();
     const vw = video.videoWidth, vh = video.videoHeight;
     check(list, vw >= 1280 ? 'ok' : 'warn', `מצלמה ${vw}×${vh}`, vw >= 1280 ? 'רזולוציה טובה.' : 'רזולוציה נמוכה. נסה איכות 4K בהגדרות, או טלפון אחר.');
-    check(list, caps.zoom ? 'ok' : 'warn', caps.zoom ? `זום עד ×${(+caps.zoom.max).toFixed(1)}` : 'אין זום מהדפדפן',
-      caps.zoom ? (S.autozoom ? 'זום אוטומטי פעיל.' : 'אפשר להפעיל זום אוטומטי בהגדרות.') : 'הטלפון לא נותן לשלוט בזום מהדפדפן (נפוץ באייפון). המערכת תחתוך את התמונה סביב הגולש, אבל כדאי לעמוד קרוב יותר לגלים.');
+    check(list, caps.zoom || lensInfo.usingTele ? 'ok' : 'warn', caps.zoom ? `זום עד ×${(+caps.zoom.max).toFixed(1)}` : 'אין זום מהדפדפן',
+      caps.zoom ? (S.autozoom ? 'זום אוטומטי פעיל.' : 'אפשר להפעיל זום אוטומטי בהגדרות.')
+        : lensInfo.usingTele ? 'אין שליטה בזום מהדפדפן, אבל עדשת הטלה פעילה. מצוין.'
+        : lensInfo.tele ? 'אין שליטה בזום מהדפדפן (נפוץ באייפון). בהגדרות > עדשה בחר "טלה" כדי להתקרב.'
+        : 'הטלפון לא נותן לשלוט בזום מהדפדפן. המערכת תחתוך את התמונה סביב הגולש, אבל כדאי לעמוד קרוב יותר לגלים.');
     const sport = caps.exposureMode && caps.exposureMode.includes('manual') && caps.exposureTime;
     check(list, sport ? 'ok' : 'warn', sport ? 'תריס מהיר זמין' : 'אין שליטה בתריס', sport ? (S.sport ? 'מצב ספורט פעיל: 1/1000 שנייה.' : 'אפשר להפעיל מצב ספורט בהגדרות.') : 'הטלפון בוחר תריס לבד. באור חזק זה בסדר. בבוקר מוקדם או בערב יכול להיות טשטוש בתנועה.');
     check(list, caps.focusMode && caps.focusMode.includes('continuous') ? 'ok' : 'info', 'פוקוס', caps.focusMode && caps.focusMode.includes('continuous') ? 'פוקוס רציף פעיל, והמערכת מכוונת אותו לגולש.' : 'הטלפון מנהל את הפוקוס לבד.');
