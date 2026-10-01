@@ -10,7 +10,8 @@ const RULES = {
   horizon: { w: 5 },
   clean: { w: 5 },
   exposure: { w: 5, ideal: 125, tol: 70 },
-  action: { base: 0.35, speedGood: 4.0, sprayGood: 0.08, speedShare: 0.3, whiteGood: 0.35, whiteShare: 0.5 },
+  action: { base: 0.35, speedGood: 4.0, sprayGood: 0.08, speedShare: 0.3, whiteGood: 0.35, whiteShare: 0.5,
+            maneuverShare: 0.45, maneuverSpeed: 1.5, maneuverDecay: 0.30, maneuverWindow: 0.25, poseShare: 0.20, poseRateGood: 1.5 },
   sea: { minFraction: 0.25, penalty: 0.4 },
   riding: { minAspect: 0.95, penalty: 0.45 },
   boardBonus: 5,
@@ -76,6 +77,52 @@ class Tracker {
     }
     s.speed = s.det ? Math.hypot(s.vx, s.vy) / Math.max(H_(s.det), 1) : 0;
     return s;
+  }
+}
+
+
+/* ---------------------------------------------------------------- maneuver timing
+   Editors want the split second of a maneuver: top of a turn / off the lip, bottom turn at speed, cutback.
+   In tracking data: a clear direction reversal with real speed before and after, or a fast body-shape change. */
+function slope(pts, i) {
+  if (pts.length < 2) return 0;
+  const t0 = pts[0][0]; let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pts) { const x = p[0] - t0, y = p[i]; n++; sx += x; sy += y; sxx += x * x; sxy += x * y; }
+  const den = n * sxx - sx * sx; return Math.abs(den) < 1e-9 ? 0 : (n * sxy - sx * sy) / den;
+}
+class Dynamics {
+  constructor() { this.reset(); }
+  reset() { this.hist = []; this.apexT = -1e9; this.apexS = 0; this.kind = ''; this.lastCheck = -1e9; }
+  update(st, t) {
+    const A = RULES.action;
+    if (!st.det || !st.visible) return { maneuver: 0, pose: 0, kind: '' };
+    const d = st.det;
+    this.hist.push([t, CX(d), CY(d), H_(d), H_(d) / Math.max(W_(d), 1)]);
+    while (this.hist.length && t - this.hist[0][0] > 2.0) this.hist.shift();
+    const hs = this.hist.map(p => p[3]).sort((a, b) => a - b), Hm = hs[hs.length >> 1] || 1;
+    // the phone measures only a few times per second: make each window hold at least ~2-3 samples
+    const span = this.hist.length > 1 ? (this.hist[this.hist.length - 1][0] - this.hist[0][0]) / (this.hist.length - 1) : 0.1;
+    const w = Math.min(0.6, Math.max(A.maneuverWindow, 2.2 * span));
+    const recent = this.hist.filter(p => t - p[0] <= w), before = this.hist.filter(p => t - p[0] > w && t - p[0] <= 2 * w);
+    if (recent.length >= 2 && before.length >= 2 && t - this.lastCheck >= w / 2) {
+      this.lastCheck = t;
+      for (const [axis, kinds] of [[2, ['top_turn', 'bottom_turn']], [1, ['cutback', 'cutback']]]) {
+        const vn = slope(recent, axis) / Hm, vb = slope(before, axis) / Hm;
+        if (vn * vb < 0) {
+          const s = Math.min(1, Math.min(Math.abs(vb), Math.abs(vn) * 2) / A.maneuverSpeed);
+          const decayed = this.apexS * Math.exp(-(t - this.apexT) / Math.max(A.maneuverDecay, w));
+          if (s >= 0.5 && s > decayed) { this.apexT = t - w / 2; this.apexS = s; this.kind = vb < 0 ? kinds[0] : kinds[1]; }
+        }
+      }
+    }
+    const man = this.apexS * Math.exp(-Math.max(0, t - this.apexT) / Math.max(A.maneuverDecay, w));
+    let pose = 0;
+    if (recent.length >= 2 && before.length >= 1) {
+      const med = a => { const v = a.map(p => p[4]).sort((x, y) => x - y); return v[v.length >> 1]; };
+      const rn = med(recent), rb = med(before);
+      if (rb > 0) pose = Math.min(1, Math.abs(Math.log(rn / rb)) / w / A.poseRateGood);
+    }
+    return { maneuver: man, pose, kind: man > 0.25 ? this.kind : '' };
   }
 }
 
@@ -160,7 +207,7 @@ function sceneSharpness(img) {
 }
 
 /* ---------------------------------------------------------------- the score */
-function scoreFrame(img, k, st, frameW, frameH) {
+function scoreFrame(img, k, st, frameW, frameH, dyn) {
   // img: analysis ImageData (the video frame scaled by k); st: tracker state in video pixels
   const R = RULES;
   if (!st.det || !st.visible) return { total: 0, parts: {} };
@@ -184,6 +231,8 @@ function scoreFrame(img, k, st, frameW, frameH) {
   const [sp, white] = spray(img, d, k), A = R.action;
   const action = clip01(A.speedShare * Math.min(1, st.speed / A.speedGood)
     + (1 - A.speedShare) * Math.max(Math.min(1, sp / A.sprayGood), A.whiteShare * Math.min(1, white / A.whiteGood)));
+  let act = action;
+  if (dyn) act = 1 - (1 - action) * (1 - Math.min(0.9, A.maneuverShare * dyn.maneuver + A.poseShare * dyn.pose));
   parts.horizon = 0.7; // phone stands on a level tripod
   const ov = Math.max(0, ...st.others.map(o => iou(d, o)));
   const close = st.others.filter(o => Math.abs(CX(o) - CX(d)) < W_(d) * 1.2 && Math.abs(CY(o) - CY(d)) < H_(d)).length;
@@ -193,13 +242,13 @@ function scoreFrame(img, k, st, frameW, frameH) {
   let q = 0, ws = 0;
   for (const key in wts) { q += parts[key] * wts[key]; ws += wts[key]; }
   q /= ws;
-  let total = 100 * q * (A.base + (1 - A.base) * action);
+  let total = 100 * q * (A.base + (1 - A.base) * act);
   const sea = seaFraction(img);
   total *= 1 - R.sea.penalty * (1 - clip01(sea / R.sea.minFraction));
   if (H_(d) / Math.max(W_(d), 1) < R.riding.minAspect && !st.board) total *= R.riding.penalty;
   if (st.board) total = Math.min(100, total + R.boardBonus);
   if (parts.sharp < 0.25) total *= 0.5;
-  parts.action = action;
+  parts.action = act;
   return { total: Math.round(total * 10) / 10, parts, sea, sharpRaw: sh, sceneSharp: bg };
 }
 
@@ -219,4 +268,4 @@ class Shutter {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { RULES, Tracker, Shutter, scoreFrame, sharpness, spray, seaFraction, iou };
+if (typeof module !== 'undefined') module.exports = { RULES, Tracker, Shutter, Dynamics, scoreFrame, sharpness, spray, seaFraction, iou };

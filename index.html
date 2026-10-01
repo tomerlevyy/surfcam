@@ -3,193 +3,317 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0B1B21">
+<meta name="theme-color" content="#0A1418">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="מצלמה שמצלמת גולשים לבד, ברגע הנכון">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>מצלמת גולשים</title>
 <style>
-/* Layout: full-screen camera; status strip on top, one thumb-reach control bar at the bottom.
-   Single dark look on purpose: it is a camera, used in bright sun, so contrast and big targets win. */
+/* Layout: full-bleed camera. One quiet status strip on top; everything you touch lives in the thumb zone
+   at the bottom. Dark on purpose: it is a viewfinder used in bright sun, so contrast and size win. */
+@font-face { font-family: "Rubik"; src: url("rubik.woff") format("woff"); font-weight: 300 900; font-display: swap; }
 :root {
-  --ink: #0B1B21;        /* deep water */
-  --glass: rgba(11, 27, 33, .72);
-  --glass-strong: rgba(11, 27, 33, .92);
-  --foam: #F2F6F5;       /* text */
-  --mist: #A8BDC0;       /* secondary text */
-  --lagoon: #7CE0D3;     /* tracking / on */
-  --sun: #FFC83D;        /* shoot / primary action */
-  --danger: #FF7A6B;
-  --line: rgba(242, 246, 245, .16);
-  --font: system-ui, -apple-system, "Segoe UI", "Noto Sans Hebrew", "Arial Hebrew", Arial, sans-serif;
+  --ink: #0A1418;                 /* deep water */
+  --ink-2: #13232A;
+  --glass: rgba(10, 20, 24, .62);
+  --glass-strong: rgba(10, 20, 24, .9);
+  --foam: #F4F8F7;                /* primary text */
+  --mist: #A9BCBF;                /* secondary text */
+  --line: rgba(244, 248, 247, .14);
+  --lagoon: #6FE3D1;              /* tracking */
+  --sun: #FFC83D;                 /* shoot / primary */
+  --coral: #FF7D6E;               /* destructive */
+  --sans: "Rubik", system-ui, -apple-system, "Segoe UI", "Noto Sans Hebrew", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --r: 14px;
+  --r-s: 12px; --r-m: 18px; --r-l: 28px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; background: var(--ink); color: var(--foam); font-family: var(--font); font-size: 15px; -webkit-tap-highlight-color: transparent; overflow: hidden; }
-button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
-button:focus-visible, input:focus-visible, select:focus-visible, label:focus-within { outline: 3px solid var(--sun); outline-offset: 2px; }
+html, body { height: 100%; margin: 0; background: var(--ink); color: var(--foam); font: 400 16px/1.45 var(--sans); -webkit-tap-highlight-color: transparent; overflow: hidden; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; padding: 0; }
+:focus-visible { outline: 3px solid var(--sun); outline-offset: 3px; border-radius: 10px; }
 [hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* ---- viewfinder */
 .stage { position: fixed; inset: 0; background: #000; }
 #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 #overlay { pointer-events: none; }
+.vignette { position: fixed; inset: 0; pointer-events: none; background: linear-gradient(rgba(10,20,24,.75), transparent 22%, transparent 70%, rgba(10,20,24,.85)); }
 
-/* top status */
-.top { position: fixed; inset-inline: 0; top: 0; padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px; display: grid; gap: 8px; background: linear-gradient(var(--glass-strong), transparent); }
-.row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand { font-weight: 800; letter-spacing: .01em; font-size: 16px; }
-.pill { margin-inline-start: auto; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--glass); border: 1px solid var(--line); color: var(--mist); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pill[data-state="on"] { color: var(--ink); background: var(--lagoon); border-color: transparent; }
-.meter-wrap { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
-.meter-label { font-size: 12px; color: var(--mist); letter-spacing: .04em; }
-.meter { position: relative; height: 10px; border-radius: 6px; background: rgba(242,246,245,.14); overflow: visible; }
-#meter-fill { position: absolute; inset-block: 0; inset-inline-start: 0; width: 0; border-radius: 6px; background: var(--lagoon); transition: width .25s ease; }
-#meter-fill[data-hot="1"] { background: var(--sun); }
-#meter-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--foam); border-radius: 1px; }
-#score-num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; min-width: 2.2ch; text-align: end; }
-#status { font-size: 13px; color: var(--foam); text-shadow: 0 1px 2px #000; }
-#debug-box { font-family: var(--mono); font-size: 11px; color: var(--mist); white-space: pre-wrap; background: var(--glass); padding: 6px 8px; border-radius: 8px; }
+/* ---- top strip */
+.top { position: fixed; inset-inline: 0; top: 0; padding: calc(env(safe-area-inset-top, 0px) + var(--s3)) var(--s4) 0; display: flex; align-items: center; gap: var(--s3); }
+.mark { display: flex; align-items: center; gap: var(--s2); font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.mark svg { width: 26px; height: 26px; }
+.chip { display: inline-flex; align-items: center; gap: var(--s2); min-height: 34px; padding: 0 var(--s3); border-radius: 999px; background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 14px; font-weight: 500; color: var(--mist); white-space: nowrap; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+#state[data-s="track"] { color: var(--ink); background: var(--lagoon); }
+#state[data-s="shot"] { color: var(--ink); background: var(--sun); }
+#state[data-s="search"] .dot { animation: blink 1.4s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+#timer { margin-inline-start: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+#debug-box { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); inset-inline: var(--s4); font: 11px/1.4 var(--mono); color: var(--mist); white-space: pre-wrap; background: var(--glass); border-radius: var(--r-s); padding: var(--s2) var(--s3); direction: ltr; text-align: left; }
 
-/* bottom controls */
-.bottom { position: fixed; inset-inline: 0; bottom: 0; padding: 18px 24px calc(env(safe-area-inset-bottom, 0px) + 22px); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; background: linear-gradient(transparent, var(--glass-strong)); }
+/* ---- idle hint */
+#hint { position: fixed; inset-inline: var(--s4); top: 40%; transform: translateY(-50%); display: grid; justify-items: center; gap: var(--s2); text-align: center; pointer-events: none; }
+#hint strong { font-size: 22px; font-weight: 700; letter-spacing: -.01em; text-shadow: 0 2px 10px rgba(0,0,0,.6); }
+#hint span { color: var(--mist); font-size: 15px; text-shadow: 0 1px 6px rgba(0,0,0,.8); max-width: 30ch; }
+
+/* ---- moment tag */
+#moment { position: fixed; inset-inline: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 158px); display: flex; justify-content: center; pointer-events: none; }
+#moment .chip { color: var(--ink); background: var(--sun); font-weight: 700; transform: translateY(8px) scale(.95); opacity: 0; transition: .25s ease; }
+#moment.on .chip { transform: none; opacity: 1; }
+
+/* ---- bottom controls */
+.dock { position: fixed; inset-inline: 0; bottom: 0; padding: var(--s4) var(--s5) calc(env(safe-area-inset-bottom, 0px) + var(--s5)); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
 .side { display: flex; justify-content: center; }
-.round { width: 56px; height: 56px; border-radius: 16px; background: var(--glass); border: 1px solid var(--line); display: grid; place-items: center; position: relative; overflow: hidden; }
-.round img { width: 100%; height: 100%; object-fit: cover; }
-.round svg { width: 26px; height: 26px; }
-.count { position: absolute; bottom: 3px; inset-inline-end: 4px; font-size: 11px; font-weight: 800; font-family: var(--mono); background: var(--sun); color: var(--ink); border-radius: 6px; padding: 0 4px; }
-#btn-start { width: 88px; height: 88px; border-radius: 50%; background: var(--sun); color: var(--ink); font-weight: 800; font-size: 17px; box-shadow: 0 0 0 5px rgba(255,200,61,.28); display: grid; place-items: center; }
-body[data-running="1"] #btn-start { background: var(--ink); color: var(--sun); box-shadow: 0 0 0 4px var(--sun); animation: pulse 1.6s ease-in-out infinite; }
-@keyframes pulse { 50% { box-shadow: 0 0 0 9px rgba(255,200,61,.35); } }
+.tool { position: relative; width: 58px; height: 58px; border-radius: var(--r-m); background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); display: grid; place-items: center; overflow: visible; }
+.tool svg { width: 26px; height: 26px; }
+.tool img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: var(--r-m); }
+.badge { position: absolute; top: -6px; inset-inline-end: -6px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; background: var(--sun); color: var(--ink); font: 700 13px/24px var(--mono); text-align: center; box-shadow: 0 0 0 3px var(--ink); }
+.badge.bump { animation: bump .4s ease; }
+@keyframes bump { 40% { transform: scale(1.35); } }
+.shutter-wrap { display: grid; justify-items: center; gap: var(--s2); }
+#shutter { position: relative; width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center; }
+#ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+#ring .track { stroke: rgba(244,248,247,.18); }
+#ring .fill { stroke: var(--lagoon); transition: stroke-dashoffset .3s ease, stroke .2s; }
+#ring .fill.hot { stroke: var(--sun); }
+#ring .tick { stroke: var(--foam); }
+.core { width: 72px; height: 72px; border-radius: 50%; background: var(--sun); color: var(--ink); display: grid; place-items: center; font-weight: 800; font-size: 16px; transition: transform .15s ease, background .2s; }
+#shutter:active .core { transform: scale(.94); }
+body[data-run="1"] .core { background: var(--ink-2); color: var(--sun); }
+body[data-run="1"] .core::before { content: ""; width: 24px; height: 24px; border-radius: 6px; background: var(--sun); }
+body[data-run="1"] .core span { display: none; }
+#score-line { font-size: 13px; color: var(--mist); font-variant-numeric: tabular-nums; min-height: 1.4em; }
 
-#flash { position: fixed; inset: 0; pointer-events: none; border: 0 solid var(--sun); opacity: 0; }
-#flash.on { animation: flash .45s ease-out; }
-@keyframes flash { 0% { opacity: 1; border-width: 14px; background: rgba(255,255,255,.18); } 100% { opacity: 0; border-width: 0; } }
+#flash { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 0 var(--sun); }
+#flash.on { animation: flash .5s ease-out; }
+@keyframes flash { 0% { box-shadow: inset 0 0 0 14px var(--sun); background: rgba(255,255,255,.12); } 100% { box-shadow: inset 0 0 0 0 var(--sun); } }
+.fly { position: fixed; z-index: 30; border-radius: var(--r-s); box-shadow: 0 8px 30px rgba(0,0,0,.5); transition: transform .55s cubic-bezier(.5,0,.3,1), opacity .55s; pointer-events: none; }
 
-#loading { position: fixed; inset-inline: 16px; top: 45%; text-align: center; font-size: 14px; color: var(--mist); }
+#loading { position: fixed; inset-inline: var(--s4); bottom: calc(env(safe-area-inset-bottom, 0px) + 170px); display: flex; justify-content: center; }
+#loading .chip { color: var(--foam); }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--lagoon); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* sheets */
-.sheet { position: fixed; inset-inline: 0; bottom: 0; max-height: 86%; overflow: auto; background: var(--glass-strong); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); border-radius: 22px 22px 0 0; padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 20px); display: grid; gap: 14px; }
-.sheet-head { display: flex; align-items: center; gap: 10px; }
-.sheet-head h2 { margin: 0; font-size: 18px; }
-.sheet-head .sub { color: var(--mist); font-size: 13px; }
-.close { margin-inline-start: auto; width: 40px; height: 40px; border-radius: 12px; background: rgba(242,246,245,.08); font-size: 20px; }
-.field { display: grid; gap: 8px; padding: 12px; border-radius: var(--r); background: rgba(242,246,245,.05); border: 1px solid var(--line); }
-.field-top { display: flex; justify-content: space-between; gap: 10px; font-weight: 600; }
-.field-top output { font-family: var(--mono); color: var(--sun); font-variant-numeric: tabular-nums; }
-.hint { font-size: 12.5px; color: var(--mist); line-height: 1.5; }
-input[type=range] { width: 100%; accent-color: var(--sun); height: 28px; }
-select { font: inherit; color: var(--foam); background: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
-.switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 600; }
-.switch input { width: 22px; height: 22px; accent-color: var(--sun); }
-.file-btn { display: inline-flex; align-items: center; justify-content: center; padding: 11px 14px; border-radius: 12px; background: rgba(242,246,245,.1); font-weight: 700; cursor: pointer; }
-.file-btn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
-.tile { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #000; max-width: 100%; }
-.tile img { width: 100%; height: 100%; object-fit: cover; }
-.tag { position: absolute; top: 5px; inset-inline-start: 5px; font-family: var(--mono); font-size: 11px; font-weight: 800; background: var(--glass-strong); color: var(--sun); border-radius: 6px; padding: 1px 5px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.btn { padding: 11px 16px; border-radius: 12px; font-weight: 700; background: rgba(242,246,245,.1); }
+/* ---- sheets */
+.sheet { position: fixed; inset-inline: 0; bottom: 0; z-index: 20; max-height: 92%; overflow: auto; background: var(--glass-strong); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-radius: var(--r-l) var(--r-l) 0 0; padding: var(--s3) var(--s4) calc(env(safe-area-inset-bottom, 0px) + var(--s5)); display: grid; gap: var(--s4); animation: up .28s ease; }
+@keyframes up { from { transform: translateY(24px); opacity: 0; } }
+.grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); justify-self: center; }
+.head { display: flex; align-items: center; gap: var(--s3); }
+.head h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.head .sub { color: var(--mist); font-size: 14px; }
+.x { margin-inline-start: auto; width: 44px; height: 44px; border-radius: 14px; background: rgba(244,248,247,.08); display: grid; place-items: center; }
+.x svg { width: 20px; height: 20px; }
+.group { display: grid; gap: 2px; border-radius: var(--r-m); overflow: hidden; }
+.group-title { font-size: 13px; font-weight: 600; color: var(--mist); letter-spacing: .04em; padding-inline: var(--s1); }
+.row { background: rgba(244,248,247,.05); padding: var(--s3) var(--s4); display: grid; gap: var(--s2); min-height: 56px; align-content: center; }
+.row-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); font-weight: 500; }
+.row-top output { font-family: var(--mono); color: var(--sun); font-variant-numeric: tabular-nums; }
+.help { font-size: 13px; color: var(--mist); }
+input[type=range] { width: 100%; height: 32px; accent-color: var(--sun); }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: rgba(244,248,247,.07); border-radius: var(--r-s); padding: 3px; gap: 3px; }
+.seg button { min-height: 40px; border-radius: 9px; font-size: 14px; font-weight: 500; color: var(--mist); }
+.seg button[aria-pressed="true"] { background: var(--foam); color: var(--ink); }
+.switch { position: relative; width: 52px; height: 32px; flex: none; }
+.switch input { appearance: none; -webkit-appearance: none; margin: 0; width: 100%; height: 100%; border-radius: 16px; background: rgba(244,248,247,.18); cursor: pointer; transition: background .2s; }
+.switch input:checked { background: var(--lagoon); }
+.switch input::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 26px; height: 26px; border-radius: 50%; background: var(--foam); transition: inset-inline-start .2s; }
+.switch input:checked::after { inset-inline-start: 23px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s2); min-height: 48px; padding: 0 var(--s4); border-radius: 14px; font-weight: 600; background: rgba(244,248,247,.1); }
 .btn.primary { background: var(--sun); color: var(--ink); }
-.btn.danger { color: var(--danger); }
-.empty { color: var(--mist); font-size: 14px; line-height: 1.6; padding: 10px 2px; }
+.btn.danger { color: var(--coral); }
+.btn svg { width: 20px; height: 20px; }
+.btns { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.file { position: relative; overflow: hidden; }
+.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
-#viewer { position: fixed; inset: 0; background: rgba(0,0,0,.94); display: grid; grid-template-rows: auto 1fr auto; padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px); gap: 12px; }
-#viewer-img { width: 100%; height: 100%; object-fit: contain; min-height: 0; }
-#viewer-info { color: var(--mist); font-size: 13px; font-family: var(--mono); direction: ltr; text-align: end; }
+/* ---- gallery */
+.wave { display: grid; gap: var(--s2); }
+.wave h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex; gap: var(--s2); align-items: baseline; }
+.wave h3 span { color: var(--mist); font-weight: 400; font-size: 13px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.tile { position: relative; aspect-ratio: 1; border-radius: var(--r-s); overflow: hidden; background: var(--ink-2); max-width: 100%; }
+.tile img { width: 100%; height: 100%; object-fit: cover; }
+.tile .score { position: absolute; bottom: 6px; inset-inline-start: 6px; font: 700 12px var(--mono); background: var(--glass-strong); border-radius: 7px; padding: 1px 6px; }
+.tile .star { position: absolute; top: 6px; inset-inline-end: 6px; width: 26px; height: 26px; border-radius: 50%; background: var(--sun); color: var(--ink); display: grid; place-items: center; }
+.tile .star svg { width: 15px; height: 15px; }
+.empty { display: grid; justify-items: center; gap: var(--s2); text-align: center; color: var(--mist); padding: var(--s6) var(--s4); }
+.empty svg { width: 56px; height: 56px; color: var(--line); }
 
-.modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; }
-.modal-card { background: var(--ink); border: 1px solid var(--line); border-radius: 18px; padding: 18px; display: grid; gap: 14px; max-width: 340px; }
+/* ---- viewer */
+#viewer { position: fixed; inset: 0; z-index: 25; background: #000; display: grid; grid-template-rows: auto 1fr auto; padding: calc(env(safe-area-inset-top, 0px) + var(--s3)) var(--s4) calc(env(safe-area-inset-bottom, 0px) + var(--s4)); gap: var(--s3); }
+#viewer-img { width: 100%; height: 100%; object-fit: contain; min-height: 0; touch-action: pan-y; }
+.meta { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.meta .chip { color: var(--foam); }
+.nav { position: absolute; top: 50%; width: 48px; height: 48px; border-radius: 50%; background: var(--glass); display: grid; place-items: center; }
+.nav svg { width: 22px; height: 22px; }
+#prev { inset-inline-start: var(--s3); } #next { inset-inline-end: var(--s3); }
 
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+/* ---- onboarding & summary */
+.modal { position: fixed; inset: 0; z-index: 40; background: rgba(5,10,12,.78); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: grid; place-items: end center; padding: var(--s4); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--s4)); }
+.card { width: 100%; max-width: 420px; background: var(--ink-2); border-radius: var(--r-l); padding: var(--s5); display: grid; gap: var(--s4); animation: up .3s ease; }
+.card h2 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.01em; text-wrap: balance; }
+.card p { margin: 0; color: var(--mist); }
+.illo { height: 150px; border-radius: var(--r-m); background: radial-gradient(120% 90% at 50% 100%, #1F5B66 0%, #0F2A31 55%, #0A1418 100%); display: grid; place-items: center; overflow: hidden; }
+.illo svg { width: 100%; height: 100%; }
+.dots { display: flex; gap: 6px; justify-content: center; }
+.dots i { width: 7px; height: 7px; border-radius: 4px; background: var(--line); transition: width .2s; }
+.dots i.on { width: 22px; background: var(--sun); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); }
+.stat { background: rgba(244,248,247,.05); border-radius: var(--r-m); padding: var(--s3); display: grid; gap: 2px; }
+.stat b { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 13px; color: var(--mist); }
+.confirm-card { place-self: center; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
-<body data-running="0">
-<div class="stage">
-  <video id="video" playsinline muted></video>
-  <canvas id="overlay"></canvas>
-</div>
-<div id="flash"></div>
-<div id="loading">טוען את מודל הזיהוי… (בפעם הראשונה בלבד, כ-17MB)</div>
+<body data-run="0">
+<div class="stage" aria-hidden="true"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+<div class="vignette" aria-hidden="true"></div>
+<div id="flash" aria-hidden="true"></div>
 
 <header class="top">
-  <div class="row">
-    <span class="brand">מצלמת גולשים</span>
-    <span id="pill" class="pill" data-state="off">לא פעיל</span>
+  <div class="mark" aria-hidden="true">
+    <svg viewBox="0 0 32 32" fill="none"><circle cx="21" cy="10" r="4.5" fill="#FFC83D"/><path d="M3 22c5-9 11-11 16-5 2 2.5 5 3 10 1" stroke="#6FE3D1" stroke-width="3" stroke-linecap="round"/></svg>
   </div>
-  <div class="meter-wrap" title="ציון הרגע. מעל הקו הלבן המצלמה מצלמת">
-    <span class="meter-label">ציון רגע</span>
-    <div class="meter"><div id="meter-fill"></div><div id="meter-tick"></div></div>
-    <span id="score-num">0</span>
-  </div>
-  <div id="status">טוען…</div>
-  <div id="debug-box" hidden></div>
+  <span id="state" class="chip" data-s="idle" role="status" aria-live="polite"><span class="dot"></span><span id="state-text">מוכן</span></span>
+  <span id="timer" class="chip" hidden>00:00</span>
 </header>
+<div id="debug-box" hidden></div>
 
-<nav class="bottom" aria-label="שליטה">
+<div id="hint"><strong>כוון את הטלפון לגולשים</strong><span>שים על חצובה, השמש מאחוריך, ולחץ על הכפתור הצהוב. מכאן היא מצלמת לבד.</span></div>
+<div id="moment" aria-hidden="true"><span class="chip" id="moment-text"></span></div>
+<div id="loading"><span class="chip"><span class="spin"></span>מכין את הזיהוי…</span></div>
+
+<nav class="dock" aria-label="פקדים">
   <div class="side">
-    <button id="btn-gallery" class="round" type="button" aria-label="גלריה">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg>
+    <button id="btn-gallery" class="tool" type="button" aria-label="גלריה, 0 תמונות">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="M3 16l5-5 4 4 3-3 6 6"/></svg>
       <img id="gallery-thumb" alt="" hidden>
-      <span class="count" id="shot-count">0</span>
+      <span class="badge" id="badge" hidden>0</span>
     </button>
   </div>
-  <button id="btn-start" type="button"><span id="start-label">התחל</span></button>
+  <div class="shutter-wrap">
+    <button id="shutter" type="button" aria-label="התחל צילום אוטומטי">
+      <svg id="ring" viewBox="0 0 100 100" aria-hidden="true">
+        <circle class="track" cx="50" cy="50" r="46" fill="none" stroke-width="5"/>
+        <circle class="fill" id="ring-fill" cx="50" cy="50" r="46" fill="none" stroke-width="5" stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="289"/>
+        <line class="tick" id="ring-tick" x1="50" y1="0" x2="50" y2="9" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span class="core"><span>התחל</span></span>
+    </button>
+    <div id="score-line" aria-live="off"></div>
+  </div>
   <div class="side">
-    <button id="btn-settings" class="round" type="button" aria-label="הגדרות">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+    <button id="btn-settings" class="tool" type="button" aria-label="הגדרות">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg>
     </button>
   </div>
 </nav>
 
-<section id="settings" class="sheet" hidden aria-label="הגדרות">
-  <div class="sheet-head"><h2>הגדרות</h2><button id="settings-close" class="close" type="button" aria-label="סגור">×</button></div>
-  <div class="field" id="zoom-row" hidden>
-    <div class="field-top"><label for="zoom">זום</label><output id="zoom-val">×1.0</output></div>
-    <input id="zoom" type="range" min="1" max="10" step="0.1" value="1">
-    <div class="hint">ככל שהגולשים רחוקים יותר, תגדיל. הגולש צריך להיראות לפחות בגובה אצבע על המסך.</div>
+<!-- settings -->
+<section id="settings" class="sheet" hidden aria-label="הגדרות" role="dialog">
+  <div class="grab" aria-hidden="true"></div>
+  <div class="head"><h2>הגדרות</h2><button class="x" data-close="settings" type="button" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+
+  <div class="group-title">צילום</div>
+  <div class="group">
+    <div class="row" id="zoom-row" hidden>
+      <div class="row-top"><label for="zoom">זום</label><output id="zoom-val">×1.0</output></div>
+      <input id="zoom" type="range" min="1" max="10" step="0.1" value="1">
+      <div class="help">הגדל עד שהגולש בגובה של אצבע על המסך.</div>
+    </div>
+    <div class="row">
+      <div class="row-top"><span id="mode-label">כמה לצלם</span></div>
+      <div class="seg" role="group" aria-labelledby="mode-label">
+        <button type="button" data-sens="55">הרבה</button><button type="button" data-sens="65">מאוזן</button><button type="button" data-sens="75">רק הטובות</button>
+      </div>
+      <div class="row-top"><label for="sens">סף מדויק</label><output id="sens-val">65</output></div>
+      <input id="sens" type="range" min="45" max="90" step="1" value="65">
+    </div>
+    <div class="row">
+      <div class="row-top"><span id="q-label">איכות</span></div>
+      <div class="seg" role="group" aria-labelledby="q-label"><button type="button" data-q="1080">Full HD</button><button type="button" data-q="4k">4K</button></div>
+      <div class="help">4K נותן תמונות גדולות יותר, אבל מחמם ומרוקן סוללה מהר יותר.</div>
+    </div>
   </div>
-  <div class="field">
-    <div class="field-top"><label for="sens">סף צילום</label><output id="sens-val">65</output></div>
-    <input id="sens" type="range" min="45" max="90" step="1" value="65">
-    <div class="hint">נמוך יותר: יותר תמונות, פחות בררני. גבוה יותר: רק הרגעים החזקים.</div>
+
+  <div class="group-title">תחושה</div>
+  <div class="group">
+    <label class="row"><span class="row-top">צליל צילום<span class="switch"><input id="sound" type="checkbox"></span></span></label>
+    <label class="row"><span class="row-top">רטט בכל צילום<span class="switch"><input id="haptic" type="checkbox"></span></span></label>
   </div>
-  <div class="field">
-    <div class="field-top"><label for="quality">איכות וידאו</label>
-      <select id="quality"><option value="1080">Full HD (מומלץ)</option><option value="4k">4K (יותר חום וסוללה)</option></select></div>
+
+  <div class="group-title">מתקדם</div>
+  <div class="group">
+    <div class="row">
+      <div class="row-top">בדיקה עם סרטון</div>
+      <div class="help">בחר סרטון גלישה מהטלפון, והמערכת תעבור עליו כאילו הוא המצלמה.</div>
+      <div class="btns"><span class="btn file">בחר סרטון<input id="test-file" type="file" accept="video/*" aria-label="בחר סרטון לבדיקה"></span></div>
+    </div>
+    <label class="row"><span class="row-top">מספרים על המסך (מצב בדיקה)<span class="switch"><input id="debug" type="checkbox"></span></span></label>
+    <div class="row"><div class="btns"><button id="btn-tour" class="btn" type="button">הצג את ההדרכה שוב</button></div></div>
   </div>
-  <label class="field switch" for="debug">מצב בדיקה (מספרים על המסך)<input id="debug" type="checkbox"></label>
-  <div class="field">
-    <div class="field-top">בדיקה עם סרטון</div>
-    <div class="hint">בחר סרטון גלישה מהטלפון, והמערכת תעבור עליו כאילו הוא המצלמה ותצלם לבד.</div>
-    <label class="file-btn">בחר סרטון<input id="test-file" type="file" accept="video/*"></label>
-  </div>
-  <div class="hint">לפני יציאה לים: הטלפון על חצובה יציבה, השמש מאחוריך, סוללה מלאה ומסך נעול על "תמיד דולק".</div>
 </section>
 
-<section id="gallery" class="sheet" hidden aria-label="גלריה">
-  <div class="sheet-head"><h2>גלריה</h2><span class="sub" id="gallery-count"></span><button id="gallery-close" class="close" type="button" aria-label="סגור">×</button></div>
-  <div class="actions"><button id="btn-share-all" class="btn primary" type="button">שמור / שתף הכל</button><button id="btn-clear" class="btn danger" type="button">מחק הכל</button></div>
-  <p id="gallery-empty" class="empty">עוד אין תמונות. לחץ "התחל", כוון לגולשים, והמערכת תצלם לבד כשיש רגע טוב.</p>
-  <div id="grid" class="grid"></div>
+<!-- gallery -->
+<section id="gallery" class="sheet" hidden aria-label="גלריה" role="dialog">
+  <div class="grab" aria-hidden="true"></div>
+  <div class="head"><h2>גלריה</h2><span class="sub" id="gallery-count"></span><button class="x" data-close="gallery" type="button" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div class="seg" role="group" aria-label="סינון"><button type="button" data-filter="all" aria-pressed="true">הכל</button><button type="button" data-filter="best" aria-pressed="false">הכי טובה בכל גל</button></div>
+  <div class="btns"><button id="btn-share-all" class="btn primary" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 14v5h14v-5"/></svg>שמור / שתף</button><button id="btn-clear" class="btn danger" type="button">מחק הכל</button></div>
+  <div id="waves"></div>
+  <div id="gallery-empty" class="empty" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 16c3-5 6-6 9-3 2 2 5 2 11 0"/><circle cx="17" cy="7" r="3"/></svg>
+    <strong>עוד אין תמונות</strong><span>לחץ על הכפתור הצהוב וכוון לגולשים. כל רגע טוב יופיע כאן.</span>
+  </div>
 </section>
 
-<div id="viewer" hidden>
-  <div class="sheet-head"><span id="viewer-info"></span><button id="viewer-close" class="close" type="button" aria-label="סגור">×</button></div>
-  <img id="viewer-img" alt="תמונה שצולמה">
-  <div class="actions"><button id="btn-share" class="btn primary" type="button">שמור / שתף</button><button id="btn-full" class="btn" type="button">הצג תמונה מלאה</button><button id="btn-delete" class="btn danger" type="button">מחק</button></div>
+<!-- viewer -->
+<div id="viewer" hidden role="dialog" aria-label="תמונה">
+  <div class="head"><div class="meta" id="viewer-meta"></div><button class="x" data-close="viewer" type="button" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <img id="viewer-img" alt="">
+  <button id="prev" class="nav" type="button" aria-label="התמונה הקודמת"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
+  <button id="next" class="nav" type="button" aria-label="התמונה הבאה"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+  <div class="btns"><button id="btn-share" class="btn primary" type="button">שמור / שתף</button><button id="btn-full" class="btn" type="button">תמונה מלאה</button><button id="btn-delete" class="btn danger" type="button">מחק</button></div>
 </div>
 
-<div id="confirm-clear" class="modal" hidden>
-  <div class="modal-card"><strong>למחוק את כל התמונות מהטלפון?</strong><span class="hint">אי אפשר לשחזר אחרי מחיקה.</span>
-    <div class="actions"><button id="confirm-yes" class="btn danger" type="button">מחק הכל</button><button id="confirm-no" class="btn" type="button">ביטול</button></div></div>
+<!-- onboarding -->
+<div id="tour" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="tour-title">
+  <div class="card">
+    <div class="illo" id="tour-illo" aria-hidden="true"></div>
+    <h2 id="tour-title"></h2>
+    <p id="tour-text"></p>
+    <div class="dots" id="tour-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="btns"><button id="tour-next" class="btn primary" type="button" style="flex:1">הבא</button><button id="tour-skip" class="btn" type="button">דלג</button></div>
+  </div>
+</div>
+
+<!-- session summary -->
+<div id="summary" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sum-title">
+  <div class="card">
+    <h2 id="sum-title">סשן מעולה 🤙</h2>
+    <div class="stats"><div class="stat"><b id="sum-time">0</b><span>דקות</span></div><div class="stat"><b id="sum-waves">0</b><span>גלים</span></div><div class="stat"><b id="sum-shots">0</b><span>תמונות</span></div></div>
+    <p id="sum-text"></p>
+    <div class="btns"><button id="sum-gallery" class="btn primary" type="button" style="flex:1">לגלריה</button><button id="sum-close" class="btn" type="button">סגור</button></div>
+  </div>
+</div>
+
+<div id="confirm" class="modal" hidden role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+  <div class="card confirm-card"><h2 id="confirm-title">למחוק את כל התמונות?</h2><p>הן יימחקו מהטלפון ואי אפשר לשחזר.</p>
+    <div class="btns"><button id="confirm-yes" class="btn danger" type="button">מחק הכל</button><button id="confirm-no" class="btn" type="button">ביטול</button></div></div>
 </div>
 
 <script src="brain.js"></script>
+<script src="edit.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
