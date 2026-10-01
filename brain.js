@@ -147,6 +147,18 @@ function seaFraction(img) {
   return n ? sea / n : 0;
 }
 
+function sceneSharpness(img) {
+  // median Laplacian variance of a few patches across the frame = how sharp this camera is right now
+  const W = img.width, H = img.height, out = [];
+  const ph = Math.max(24, Math.round(H / 6)), pw = ph;
+  for (let gy = 1; gy <= 3; gy++) for (let gx = 1; gx <= 4; gx++) {
+    const cx = Math.round(W * gx / 5), cy = Math.round(H * gy / 4);
+    out.push(sharpness(img, { x1: cx - pw / 2, y1: cy - ph / 2, x2: cx + pw / 2, y2: cy + ph / 2 }, 1));
+  }
+  out.sort((a, b) => a - b);
+  return (out[5] + out[6]) / 2;
+}
+
 /* ---------------------------------------------------------------- the score */
 function scoreFrame(img, k, st, frameW, frameH) {
   // img: analysis ImageData (the video frame scaled by k); st: tracker state in video pixels
@@ -163,7 +175,12 @@ function scoreFrame(img, k, st, frameW, frameH) {
     parts.lead = clip01((ahead / free - 0.35) / (R.lead.ideal - 0.35));
   }
   const sh = sharpness(img, d, k);
-  parts.sharp = clip01((sh - R.sharp.bad) / (R.sharp.good - R.sharp.bad));
+  // judge sharpness against the rest of the picture: if everything is soft (phone zoom, haze, filming a screen)
+  // that is the camera, not a bad moment. Only a surfer blurrier than the scene (motion blur) loses points.
+  const bg = sceneSharpness(img);
+  const absScore = clip01((sh - R.sharp.bad) / (R.sharp.good - R.sharp.bad));
+  const relScore = bg > 1 ? clip01((sh / bg - 0.35) / (0.9 - 0.35)) : absScore;
+  parts.sharp = Math.max(absScore, relScore);
   const [sp, white] = spray(img, d, k), A = R.action;
   const action = clip01(A.speedShare * Math.min(1, st.speed / A.speedGood)
     + (1 - A.speedShare) * Math.max(Math.min(1, sp / A.sprayGood), A.whiteShare * Math.min(1, white / A.whiteGood)));
@@ -183,7 +200,7 @@ function scoreFrame(img, k, st, frameW, frameH) {
   if (st.board) total = Math.min(100, total + R.boardBonus);
   if (parts.sharp < 0.25) total *= 0.5;
   parts.action = action;
-  return { total: Math.round(total * 10) / 10, parts, sea, sharpRaw: sh };
+  return { total: Math.round(total * 10) / 10, parts, sea, sharpRaw: sh, sceneSharp: bg };
 }
 
 /* ---------------------------------------------------------------- when to shoot */
